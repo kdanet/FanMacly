@@ -161,8 +161,8 @@ import AppIntents
                 for _ in 0..<3 { try await poll(client) }
             }
             if extended {
-                let saved = UserDefaults.standard.data(forKey: "coolingCurve").flatMap { try? JSONDecoder().decode(CoolingCurve.self, from: $0) }
-                let curve = saved.flatMap { $0.isValid ? $0 : nil } ?? .balanced
+                // The built-in Balanced curve: the check must not depend on user profiles.
+                let curve = CoolingCurve.balanced
                 print("Checking temperature profile with live CPU samples")
                 client.apply(.init(mode: .curve, curve: curve))
                 var verified = false

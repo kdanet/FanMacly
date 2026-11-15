@@ -58,9 +58,11 @@ struct StartBoostIntent: AppIntent {
         let model = try await FanMaclyIntentRouter.waitForModel()
         for _ in 0..<50 where !model.helper.connected || !model.hasFans { try await Task.sleep(for: .milliseconds(100)) }
         guard model.helper.connected else { throw FanMaclyError.message("Нет связи с системным компонентом FanMacly.") }
-        guard model.startBoost(minutes: minutes) else { throw FanMaclyError.message("Нет данных о вентиляторах — буст не включён.") }
+        guard let until = model.startBoost(minutes: minutes) else { throw FanMaclyError.message("Нет данных о вентиляторах — буст не включён.") }
         for _ in 0..<100 {
-            if model.helper.status.intent?.boost != nil, model.pendingSelection == nil {
+            // Compare the end time: an already running boost must not count as confirmation.
+            if let confirmed = model.helper.status.intent?.boost?.until, abs(confirmed.timeIntervalSince(until)) < 1,
+               model.pendingSelection == nil {
                 return .result(dialog: "Буст включён на \(minutes) мин.")
             }
             if let error = model.transientError { throw FanMaclyError.message(error) }

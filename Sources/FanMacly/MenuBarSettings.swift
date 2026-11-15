@@ -19,16 +19,17 @@ struct MenuBarSettings: Codable, Equatable {
     var animated = true
     var display: Display = .icon
     var speed: AnimationSpeed = .normal
-    /// Tint the icon while FanMacly controls the fans.
-    var tintsWhenActive = true
+    /// Tint the icon orange while the chosen mode is not in effect. Replaces
+    /// `tintsWhenActive` (accent while in control), whose stored value is ignored.
+    var highlightsLostControl = true
 
     init() {}
-    private enum CodingKeys: String, CodingKey { case animated, display, speed, tintsWhenActive, showsTemperature }
+    private enum CodingKeys: String, CodingKey { case animated, display, speed, highlightsLostControl, showsTemperature }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         animated = try values.decodeIfPresent(Bool.self, forKey: .animated) ?? true
         speed = try values.decodeIfPresent(AnimationSpeed.self, forKey: .speed) ?? .normal
-        tintsWhenActive = try values.decodeIfPresent(Bool.self, forKey: .tintsWhenActive) ?? true
+        highlightsLostControl = try values.decodeIfPresent(Bool.self, forKey: .highlightsLostControl) ?? true
         if let display = try values.decodeIfPresent(Display.self, forKey: .display) { self.display = display }
         else if try values.decodeIfPresent(Bool.self, forKey: .showsTemperature) == true { display = .temperature }
     }
@@ -37,7 +38,7 @@ struct MenuBarSettings: Codable, Equatable {
         try values.encode(animated, forKey: .animated)
         try values.encode(display, forKey: .display)
         try values.encode(speed, forKey: .speed)
-        try values.encode(tintsWhenActive, forKey: .tintsWhenActive)
+        try values.encode(highlightsLostControl, forKey: .highlightsLostControl)
         // Keeps older FanMacly versions able to read the setting after a downgrade.
         try values.encode(display == .temperature, forKey: .showsTemperature)
     }

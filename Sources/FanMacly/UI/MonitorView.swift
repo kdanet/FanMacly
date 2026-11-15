@@ -38,12 +38,11 @@ struct MonitorView: View {
 
 // MARK: - History
 
-/// One value of one line in a history chart.
-private struct SeriesPoint: Identifiable {
-    let series: String
-    let date: Date
-    let value: Double
-    var id: String { "\(series)-\(date.timeIntervalSinceReferenceDate)" }
+/// One line of a history chart: its legend name, colour and value per sample.
+private struct ChartSeries {
+    let name: String
+    let color: Color
+    let value: (HistorySample) -> Double?
 }
 
 private struct HistoryView: View {
@@ -79,18 +78,17 @@ private struct HistoryView: View {
                                            description: Text("История появится через несколько секунд."))
                         .frame(maxWidth: .infinity, minHeight: 300)
                 } else {
-                    HistoryChart(title: "Температура", unit: "°C", range: range, domain: domain,
-                                 series: [("CPU", Color.accentColor), ("GPU", Color.purple)],
-                                 points: points(samples, [("CPU", \.cpu), ("GPU", \.gpu)]),
+                    HistoryChart(title: "Температура", unit: "°C", samples: samples, domain: domain,
+                                 series: [ChartSeries(name: "CPU", color: .accentColor) { $0.cpu },
+                                          ChartSeries(name: "GPU", color: .purple) { $0.gpu }],
                                  format: { "\(Int($0.rounded()))°" }, axisStep: 10, minimumSpan: 30)
-                    HistoryChart(title: "Обороты вентиляторов", unit: "об/мин", range: range, domain: domain,
+                    HistoryChart(title: "Обороты вентиляторов", unit: "об/мин", samples: samples, domain: domain,
                                  series: fanSeries(samples),
-                                 points: fanPoints(samples),
                                  format: { rpmNumber($0) }, axisStep: 1000, minimumSpan: 2000, includesZero: true)
                     if samples.contains(where: { $0.cpuWatts != nil || $0.gpuWatts != nil }) {
-                        HistoryChart(title: "Мощность", unit: "Вт", range: range, domain: domain,
-                                     series: [("CPU", Color.accentColor), ("GPU", Color.purple)],
-                                     points: points(samples, [("CPU", \.cpuWatts), ("GPU", \.gpuWatts)]),
+                        HistoryChart(title: "Мощность", unit: "Вт", samples: samples, domain: domain,
+                                     series: [ChartSeries(name: "CPU", color: .accentColor) { $0.cpuWatts },
+                                              ChartSeries(name: "GPU", color: .purple) { $0.gpuWatts }],
                                      format: { String(format: $0 < 10 ? "%.1f" : "%.0f", $0) }, axisStep: 5, minimumSpan: 5, includesZero: true)
                     }
                 }
@@ -99,18 +97,13 @@ private struct HistoryView: View {
         }
     }
 
-    private func points(_ samples: [HistorySample], _ series: [(String, KeyPath<HistorySample, Double?>)]) -> [SeriesPoint] {
-        series.flatMap { name, path in samples.compactMap { sample in sample[keyPath: path].map { SeriesPoint(series: name, date: sample.date, value: $0) } } }
-    }
-    private func fanSeries(_ samples: [HistorySample]) -> [(String, Color)] {
+    private func fanSeries(_ samples: [HistorySample]) -> [ChartSeries] {
         let count = samples.map(\.fans.count).max() ?? 0
         let palette: [Color] = [.teal, .orange, .pink, .indigo]
-        return (0..<count).map { ("Вентилятор \($0 + 1)", palette[$0 % palette.count]) }
-    }
-    private func fanPoints(_ samples: [HistorySample]) -> [SeriesPoint] {
-        samples.flatMap { sample in
-            sample.fans.enumerated().compactMap { index, value in
-                value.map { SeriesPoint(series: "Вентилятор \(index + 1)", date: sample.date, value: $0) }
+        let names = FanNames(count: count)
+        return (0..<count).map { index in
+            ChartSeries(name: names.title(index), color: palette[index % palette.count]) { sample in
+                sample.fans.indices.contains(index) ? sample.fans[index] : nil
             }
         }
     }
@@ -121,41 +114,45 @@ private struct HistoryView: View {
 private struct HistoryChart: View {
     let title: String
     let unit: String
-    let range: TimeInterval
+    let samples: [HistorySample]
     let domain: ClosedRange<Date>
-    let series: [(String, Color)]
-    let points: [SeriesPoint]
+    let series: [ChartSeries]
     let format: (Double) -> String
     let axisStep: Double
     let minimumSpan: Double
     var includesZero = false
 
     var body: some View {
+        let points = ChartData.points(samples, series: series.map { ($0.name, $0.value) }, domain: domain)
+        let present = Set(points.map(\.series))
+        // Series without any data (e.g. CPU power where the counters are unavailable) are left out.
+        let visible = series.filter { present.contains($0.name) }
+        let y = yScale(points)
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 14) {
                 Text(title).font(.headline)
                 Text(unit).font(.caption).foregroundStyle(.secondary)
                 Spacer(minLength: 8)
-                ForEach(visibleSeries, id: \.0) { name, color in
+                ForEach(visible, id: \.name) { line in
                     HStack(spacing: 5) {
-                        Circle().fill(color).frame(width: 7, height: 7)
-                        Text(name).foregroundStyle(.secondary)
-                        Text(latest(name).map(format) ?? "—").monospacedDigit().fontWeight(.semibold)
+                        Circle().fill(line.color).frame(width: 7, height: 7)
+                        Text(line.name).foregroundStyle(.secondary)
+                        Text(latest(line).map(format) ?? "—").monospacedDigit().fontWeight(.semibold)
                     }
                     .font(.caption)
                     .fixedSize()
                 }
             }
             Chart(points) { point in
-                LineMark(x: .value("Время", point.date), y: .value(unit, point.value), series: .value("Ряд", point.series))
+                LineMark(x: .value("Время", point.date), y: .value(unit, point.value), series: .value("Линия", point.line))
                     .foregroundStyle(by: .value("Ряд", point.series))
                     .lineStyle(StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
                     .interpolationMethod(.monotone)
             }
-            .chartForegroundStyleScale(domain: series.map(\.0), range: series.map(\.1))
+            .chartForegroundStyleScale(domain: series.map(\.name), range: series.map(\.color))
             .chartLegend(.hidden)
             .chartXScale(domain: domain)
-            .chartYScale(domain: yDomain)
+            .chartYScale(domain: y.domain)
             .chartXAxis {
                 AxisMarks(values: ticks) { _ in
                     AxisGridLine()
@@ -167,7 +164,7 @@ private struct HistoryChart: View {
                 }
             }
             .chartYAxis {
-                AxisMarks(position: .trailing, values: .stride(by: axisStep)) { value in
+                AxisMarks(position: .trailing, values: .stride(by: y.step)) { value in
                     AxisGridLine()
                     // Same label width on every chart keeps their time grids aligned.
                     AxisValueLabel { if let v = value.as(Double.self) { Text(format(v)).frame(width: 40, alignment: .leading) } }
@@ -185,32 +182,35 @@ private struct HistoryChart: View {
         [15, 30, 60, 120, 300, 600, 900].first { span / $0 <= 6 } ?? 1800
     }
     /// Ticks on round clock values (…:00, :15, :30), not offsets from the first sample.
+    /// A tick right at an edge has no room for its centred label (it was
+    /// truncated to "0…"), so ticks keep a little inside the chart.
     private var ticks: [Date] {
         let step = tickStep
-        let first = (domain.lowerBound.timeIntervalSince1970 / step).rounded(.up) * step
-        return stride(from: first, through: domain.upperBound.timeIntervalSince1970, by: step).map { Date(timeIntervalSince1970: $0) }
+        let margin = span * 0.06
+        let first = ((domain.lowerBound.timeIntervalSince1970 + margin) / step).rounded(.up) * step
+        return stride(from: first, through: domain.upperBound.timeIntervalSince1970 - margin, by: step).map { Date(timeIntervalSince1970: $0) }
     }
 
-    /// Series without any data (e.g. CPU power where the counters are unavailable) are left out.
-    private var visibleSeries: [(String, Color)] { series.filter { name, _ in points.contains { $0.series == name } } }
+    /// The newest raw reading, not a bucket average.
+    private func latest(_ line: ChartSeries) -> Double? { samples.last(where: { line.value($0) != nil }).flatMap(line.value) }
 
-    private func latest(_ name: String) -> Double? { points.last(where: { $0.series == name })?.value }
-
-    /// Rounded to the axis step around the data, never narrower than `minimumSpan`.
-    private var yDomain: ClosedRange<Double> {
+    /// Rounded to a step that gives about five or six gridlines, never narrower than
+    /// `minimumSpan` and never a step finer than `axisStep`.
+    private func yScale(_ points: [ChartPoint]) -> (domain: ClosedRange<Double>, step: Double) {
         let values = points.map(\.value)
-        guard var low = values.min(), var high = values.max() else { return 0...minimumSpan }
+        guard var low = values.min(), var high = values.max() else { return (0...minimumSpan, axisStep) }
         if includesZero { low = 0 }
         if high - low < minimumSpan {
             let middle = (high + low) / 2
             low = includesZero ? 0 : middle - minimumSpan / 2
             high = includesZero ? minimumSpan : middle + minimumSpan / 2
         }
-        low = (low / axisStep).rounded(.down) * axisStep
+        let step = ChartData.axisStep(span: high - low, minimum: axisStep)
+        low = (low / step).rounded(.down) * step
         // A quarter step of headroom so a line never sits on the top edge.
-        high = ((high + axisStep / 4) / axisStep).rounded(.up) * axisStep
-        if high <= low { high = low + axisStep }
-        return low...high
+        high = ((high + step / 4) / step).rounded(.up) * step
+        if high <= low { high = low + step }
+        return (low...high, step)
     }
 }
 
@@ -272,7 +272,7 @@ private struct SensorsView: View {
     }
 
     /// Channels that read like placeholders (e.g. 2–5 °C) are hidden by default.
-    static func noise(_ sensor: TemperatureSensor) -> Bool { sensor.celsius < 10 }
+    static func noise(_ sensor: TemperatureSensor) -> Bool { sensor.isPlaceholder }
 
     @ViewBuilder private var detail: some View {
         if let id = selection, let sensor = model.snapshot.sensors.first(where: { $0.id == id }) {

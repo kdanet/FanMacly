@@ -1,4 +1,5 @@
 import Foundation
+import IOKit
 
 public enum SensorGroup: String, Codable, CaseIterable, Sendable {
     case cpu = "CPU", gpu = "GPU", battery = "Аккумулятор", memory = "Память и SSD", enclosure = "Корпус", other = "Другие"
@@ -22,6 +23,11 @@ public struct TemperatureSensor: Identifiable, Codable, Sendable {
     public init(id: String, name: String, group: SensorGroup, celsius: Double) {
         self.id = id; self.name = name; self.group = group; self.celsius = celsius
     }
+    /// Some SMC channels report a placeholder (1–5 °C) instead of a reading,
+    /// e.g. GPU sensors while the GPU is power-gated. No part of a running Mac
+    /// is that cold, so such values are not temperatures.
+    public static let placeholderBelow = 10.0
+    public var isPlaceholder: Bool { celsius < Self.placeholderBelow }
 }
 
 public struct FanReading: Identifiable, Codable, Sendable {
@@ -30,7 +36,6 @@ public struct FanReading: Identifiable, Codable, Sendable {
     public var minimum: Double?
     public var maximum: Double?
     public var manual: Bool?
-    public var name: String { "Вентилятор \(id + 1)" }
     public var safeMinimum: Double { max(minimum ?? 1200, 1200) }
     public var controllable: Bool {
         guard let minimum, let maximum, let current, current.isFinite, (0...20000).contains(current) else { return false }
@@ -38,6 +43,55 @@ public struct FanReading: Identifiable, Codable, Sendable {
     }
     public init(id: Int, current: Double?, minimum: Double?, maximum: Double?, manual: Bool?) {
         self.id = id; self.current = current; self.minimum = minimum; self.maximum = maximum; self.manual = manual
+    }
+}
+
+/// Human names of fans. Apple Silicon SMC does not say where a fan sits
+/// (there is no `F0ID`), so the side is inferred: a MacBook Pro with two fans
+/// has `F0` on the left and `F1` on the right, as seen from the keyboard.
+/// Other Macs keep numbers; a single fan is just "вентилятор".
+public struct FanNames: Equatable, Sendable {
+    public enum Side: Sendable { case left, right }
+    public let count: Int
+    public let laptop: Bool
+    public init(count: Int?, laptop: Bool = FanNames.isLaptop) {
+        self.count = count ?? 0; self.laptop = laptop
+    }
+    /// Laptops have an internal battery; desktops do not.
+    public static let isLaptop: Bool = {
+        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))
+        defer { if service != 0 { IOObjectRelease(service) } }
+        return service != 0
+    }()
+    public func side(_ fan: Int) -> Side? {
+        guard laptop, count == 2, (0..<2).contains(fan) else { return nil }
+        return fan == 0 ? .left : .right
+    }
+    /// Short label for a fan row or a chart legend: "Левый", "Вентилятор 3".
+    public func title(_ fan: Int) -> String {
+        switch side(fan) {
+        case .left: return "Левый"
+        case .right: return "Правый"
+        case nil: return count == 1 ? "Вентилятор" : "Вентилятор \(fan + 1)"
+        }
+    }
+    /// "левый вентилятор" (also the accusative: «macOS забрала …»).
+    public func nominative(_ fan: Int) -> String { form(fan, "левый", "правый", "вентилятор") }
+    /// "Левый вентилятор", to start a sentence.
+    public func subject(_ fan: Int) -> String {
+        let text = nominative(fan)
+        return text.prefix(1).uppercased() + text.dropFirst()
+    }
+    /// "левого вентилятора" («режим …»).
+    public func genitive(_ fan: Int) -> String { form(fan, "левого", "правого", "вентилятора") }
+    /// "левым вентилятором" («управление …»).
+    public func instrumental(_ fan: Int) -> String { form(fan, "левым", "правым", "вентилятором") }
+    private func form(_ fan: Int, _ left: String, _ right: String, _ noun: String) -> String {
+        switch side(fan) {
+        case .left: return "\(left) \(noun)"
+        case .right: return "\(right) \(noun)"
+        case nil: return count == 1 ? noun : "\(noun) \(fan + 1)"
+        }
     }
 }
 
@@ -49,7 +103,11 @@ public struct HardwareSnapshot: Codable, Sendable {
     public var error: String?
     public var thermalPressure: ThermalPressure?
     public var hottestCPU: Double? { cpuPeakReading?.celsius }
-    public func temperature(_ group: SensorGroup) -> Double? { sensors.filter { $0.group == group }.map(\.celsius).max() }
+    public var fanNames: FanNames { FanNames(count: fanCount ?? fans.count) }
+    /// The hottest real reading of a group; placeholders are ignored.
+    public func temperature(_ group: SensorGroup) -> Double? {
+        sensors.filter { $0.group == group && !$0.isPlaceholder }.map(\.celsius).max()
+    }
     public init(date: Date = Date(), fans: [FanReading] = [], sensors: [TemperatureSensor] = [], fanCount: Int? = nil, error: String? = nil, thermalPressure: ThermalPressure? = nil) {
         self.date = date; self.fans = fans; self.sensors = sensors; self.fanCount = fanCount; self.error = error
         self.thermalPressure = thermalPressure

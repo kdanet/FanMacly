@@ -86,7 +86,12 @@ enum TemperatureLevel {
         self.defaults = defaults
         loadSettings()
         helper.onStatusReceived = { [weak self] in self?.helperStatusChanged() }
-        helper.onDisconnect = { [weak self] in self?.pendingSelection = nil }
+        helper.onDisconnect = { [weak self] in
+            guard let self else { return }
+            // A request the helper never answered is sent again after reconnecting.
+            if self.pendingSelection != nil, self.adoptedHelperState { self.applyMissedWhileDisconnected = true }
+            self.pendingSelection = nil
+        }
         guard startMonitoring else { return }
         notifier.configure()
         notifier.onResume = { [weak self] in self?.resume() }
@@ -202,21 +207,23 @@ enum TemperatureLevel {
 
     // MARK: - Selection
 
-    func select(_ selection: ModeSelection) {
+    /// `endingBoost`: an explicit "return to macOS" (Control Center, Shortcuts)
+    /// also ends a running boost; in the panel the boost has its own control.
+    func select(_ selection: ModeSelection, endingBoost: Bool = false) {
         transientError = nil
         focusOverride = nil
         if let appOverride { suppressedOverride = appOverride }
         ruleReason = nil
         // Picking the suspended mode again is an explicit "try again".
-        setUserSelection(selection, force: helper.status.suspension != nil && selection == activeSelection)
+        setUserSelection(selection, force: helper.status.suspension != nil && selection == activeSelection, endingBoost: endingBoost)
     }
 
-    private func setUserSelection(_ selection: ModeSelection, force: Bool = false) {
+    private func setUserSelection(_ selection: ModeSelection, force: Bool = false, endingBoost: Bool = false) {
         userSelection = selection
         rememberAsProfile(selection)
         save(selection, "selection")
         save(lastNonAutomatic, "lastNonAutomatic")
-        applyEffective(force: force)
+        applyEffective(force: force, endingBoost: endingBoost)
     }
 
     /// «Профиль» (Control Center, the profile editor) means a temperature
@@ -240,19 +247,20 @@ enum TemperatureLevel {
     }
 
     /// Send the effective selection to the helper if it differs from its intent.
-    func applyEffective(force: Bool = false) {
+    func applyEffective(force: Bool = false, endingBoost: Bool = false) {
         // A choice made while the helper is reconnecting is sent once it is back.
         guard helper.connected else { applyMissedWhileDisconnected = adoptedHelperState; return }
         applyMissedWhileDisconnected = false
         let selection = effectiveSelection
         // A running boost carries over; it returns to macOS only if the new mode is Авто.
-        guard var request = request(for: selection, boost: boostUntil.map { BoostRequest(until: $0, thenSystem: selection == .automatic) }) else { return }
+        let boost = endingBoost ? nil : boostUntil.map { BoostRequest(until: $0, thenSystem: selection == .automatic) }
+        guard var request = request(for: selection, boost: boost) else { return }
         request.fromRule = overrideReason != nil
         let current = helper.status.intent
         if !force {
             if request.mode == .system && current == nil { return }
             // A suspension waiting for the user is only retried through resume()/select().
-            if let current, current.profileID == request.profileID, current.mode == request.mode,
+            if let current, current.profileID == request.profileID, current.profileName == request.profileName, current.mode == request.mode,
                current.curve == request.curve, current.targets == request.targets, current.boost == request.boost,
                current.autoResume == request.autoResume, current.fromRule == request.fromRule { return }
         }
@@ -264,7 +272,7 @@ enum TemperatureLevel {
         helper.apply(request) { [weak self] error in
             guard let self else { return }
             if self.pendingSelection == selection { self.pendingSelection = nil }
-            if let error { self.transientError = error }
+            if let error, error != HelperClient.disconnectedMessage { self.transientError = error }
         }
     }
 
@@ -309,15 +317,15 @@ enum TemperatureLevel {
 
     // MARK: - Boost
 
-    /// Returns false when nothing could be sent (no helper or no fan data).
-    @discardableResult func startBoost(minutes: Int) -> Bool {
-        guard helper.connected else { return false }
+    /// The requested end time, or nil when nothing could be sent (no helper or no fan data).
+    @discardableResult func startBoost(minutes: Int) -> Date? {
+        guard helper.connected else { return nil }
         let until = Date().addingTimeInterval(TimeInterval(minutes) * 60)
         let base = effectiveSelection
-        guard let request = request(for: base, boost: BoostRequest(until: until, thenSystem: base == .automatic)) else { return false }
+        guard let request = request(for: base, boost: BoostRequest(until: until, thenSystem: base == .automatic)) else { return nil }
         transientError = nil
         send(request, showing: base)
-        return true
+        return until
     }
 
     func cancelBoost() {
@@ -359,7 +367,8 @@ enum TemperatureLevel {
 
     @discardableResult
     func saveProfile(name: String, curve: CoolingCurve, replacing id: UUID? = nil) throws -> UUID {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The helper keeps at most 64 characters of a name.
+        let trimmed = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(64))
         guard !CoolingPreset.allCases.map(\.title).contains(trimmed) else {
             throw FanMaclyError.message("Выберите название, отличающееся от встроенных профилей.")
         }
@@ -377,6 +386,14 @@ enum TemperatureLevel {
         guard let data = try? next.encoded() else { return }
         defaults.set(data, forKey: "savedCoolingProfiles")
         profileLibrary = next
+        // Rules that pointed at the profile stop applying instead of falling back silently.
+        var rules = automationSettings
+        let deleted = ModeSelection.profile(id)
+        if rules.onPower == deleted { rules.onPower = nil }
+        if rules.onBattery == deleted { rules.onBattery = nil }
+        if rules.lowPowerMode == deleted { rules.lowPowerMode = nil }
+        rules.appRules.removeAll { $0.selection == deleted }
+        if rules != automationSettings { automationSettings = rules }
         if userSelection == .profile(id) { setUserSelection(.preset(.balanced)) }
         if lastNonAutomatic == .profile(id) {
             lastNonAutomatic = .preset(.balanced)
@@ -443,7 +460,7 @@ enum TemperatureLevel {
             try await Task.sleep(for: .milliseconds(100))
         }
         guard helper.connected else { throw FanMaclyError.message(helper.error ?? "Нет связи с системным компонентом FanMacly.") }
-        select(selection)
+        select(selection, endingBoost: selection == .automatic)
         for _ in 0..<100 {
             // Without a connection activeSelection is only the local choice.
             if helper.connected, activeSelection == selection, pendingSelection == nil { return }

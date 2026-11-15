@@ -41,6 +41,9 @@ public struct PowerReading: Codable, Sendable, Equatable {
 /// sample timestamp freezes while other PMGR groups such as "CPU Stats" keep updating). CPU and DRAM can never
 /// consume exactly zero energy while the system is awake, so a zero CPU delta marks every channel from the
 /// same driver as stale and the affected components are reported as `nil` rather than as 0 W.
+/// The GPU driver's counter shows the same pattern on its own. When the counters resume they jump by the energy of the whole frozen stretch at once (thousands of watts
+/// over one interval), so the first delta after a freeze is discarded as well. Any component above
+/// `PowerPlausibility.maximumWatts` is treated as a counter glitch.
 ///
 /// Not thread-safe; confine to one actor/queue. Returns nil on the first call (baseline) and whenever IOReport is unavailable.
 public final class PowerSampler {
@@ -75,6 +78,8 @@ public final class PowerSampler {
     private let subscribedChannels: CFMutableDictionary?
     private var previous: CFDictionary?
     private var previousTime: UInt64 = 0
+    private var freeze = CounterFreeze()
+    private var gpuFreeze = CounterFreeze()
 
     public var isAvailable: Bool { api != nil && subscription != nil && subscribedChannels != nil }
 
@@ -182,16 +187,17 @@ public final class PowerSampler {
 
         // A frozen driver yields an exact zero delta for all of its channels. CPU energy is never truly zero over
         // an interval, so use it as the staleness probe for its driver (normally the PMGR, which also owns ANE/DRAM).
-        var stale = Set<Component>()
-        if joules[cpuKey] == 0 {
-            stale.insert(cpuKey)
-            if api.getDriverID != nil, let cpuDrivers = drivers[cpuKey] {
-                for (component, sources) in drivers where sources.isSubset(of: cpuDrivers) { stale.insert(component) }
-            }
+        var cpuDriver: Set<Component> = [cpuKey]
+        if api.getDriverID != nil, let cpuDrivers = drivers[cpuKey] {
+            for (component, sources) in drivers where sources.isSubset(of: cpuDrivers) { cpuDriver.insert(component) }
         }
+        var stale = freeze.isStale(frozen: joules[cpuKey] == 0) ? cpuDriver : []
+        // The GPU driver (AGX) skips updates the same way: an exact zero, then a double-sized delta.
+        // A fully power-gated GPU also reads zero; it is shown as "no data" rather than 0 W.
+        if !cpuDriver.contains(gpuKey), gpuFreeze.isStale(frozen: joules[gpuKey] == 0) { stale.insert(gpuKey) }
         func watts(_ key: Component) -> Double? {
             guard let energy = joules[key], !stale.contains(key) else { return nil }
-            return max(0, energy) / interval
+            return PowerPlausibility.watts(joules: energy, interval: interval)
         }
 
         let cpu = watts(cpuKey), gpu = watts(gpuKey), ane = watts(.ane), dram = watts(.dram)
@@ -228,5 +234,26 @@ public final class PowerSampler {
         let value = Unmanaged<CFTypeRef>.fromOpaque(pointer).takeUnretainedValue()
         guard CFGetTypeID(value) == CFStringGetTypeID() else { return nil }
         return unsafeBitCast(value, to: CFString.self) as String
+    }
+}
+
+/// Tracks a counter that can freeze: the frozen deltas and the catch-up jump right after them are both unusable.
+struct CounterFreeze {
+    private var frozenBefore = false
+    /// Call once per delta with whether this delta is an exact zero.
+    mutating func isStale(frozen: Bool) -> Bool {
+        defer { frozenBefore = frozen }
+        return frozen || frozenBefore
+    }
+}
+
+public enum PowerPlausibility {
+    /// Far above any Apple Silicon component (an M-series Max/Ultra draws well under 300 W in total).
+    public static let maximumWatts = 500.0
+    /// Average power, or nil for an impossible value.
+    public static func watts(joules: Double, interval: TimeInterval) -> Double? {
+        guard interval > 0, joules.isFinite else { return nil }
+        let watts = max(0, joules) / interval
+        return watts <= maximumWatts ? watts : nil
     }
 }

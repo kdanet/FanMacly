@@ -24,11 +24,14 @@ public struct FanControlLost: LocalizedError, Equatable {
     public let fan: Int
     /// nil when the mode register could not be read at all.
     public let observedMode: Double?
-    public init(fan: Int, observedMode: Double?) { self.fan = fan; self.observedMode = observedMode }
+    public let names: FanNames
+    public init(fan: Int, observedMode: Double?, names: FanNames = FanNames(count: nil)) {
+        self.fan = fan; self.observedMode = observedMode; self.names = names
+    }
     public var errorDescription: String? {
         observedMode == nil
-            ? "Не удалось прочитать режим вентилятора \(fan + 1)."
-            : "macOS вернула управление вентилятором \(fan + 1)."
+            ? "Не удалось прочитать режим \(names.genitive(fan))."
+            : "macOS вернула управление \(names.instrumental(fan))."
     }
 }
 
@@ -57,6 +60,7 @@ public final class FanModeController {
         self.registers = registers; self.clock = clock
     }
 
+    private var names: FanNames { FanNames(count: registers.number("FNum").map { Int($0) }) }
     public func mode(fan: Int) -> (key: String, value: Double)? {
         guard (0..<10).contains(fan) else { return nil }
         for key in ["F\(fan)Md", "F\(fan)md"] {
@@ -67,7 +71,7 @@ public final class FanModeController {
 
     public func setManual(_ manual: Bool, fan: Int) throws {
         guard let mode = mode(fan: fan) else {
-            throw FanMaclyError.message("SMC не сообщает режим вентилятора \(fan + 1): ни F\(fan)Md, ни F\(fan)md не доступны.")
+            throw FanMaclyError.message("SMC не сообщает режим \(names.genitive(fan)): ни F\(fan)Md, ни F\(fan)md не доступны.")
         }
         if !manual {
             // Some SMC firmware rejects switching a stopped manual fan back
@@ -78,13 +82,13 @@ public final class FanModeController {
                 guard let minimum = registers.number("F\(fan)Mn"), minimum.isFinite,
                       let maximum = registers.number("F\(fan)Mx"), maximum.isFinite,
                       max(1200, minimum) <= maximum else {
-                    throw FanMaclyError.message("Неизвестен рабочий диапазон для запуска вентилятора \(fan + 1) перед возвратом автоматики.")
+                    throw FanMaclyError.message("Неизвестен рабочий диапазон для запуска \(names.genitive(fan)) перед возвратом автоматики.")
                 }
                 if restoringStoppedFans[fan] == nil { restoringStoppedFans[fan] = clock() }
                 try setTarget(max(max(1200, minimum), min(2500, maximum)), fan: fan)
                 guard registers.number("F\(fan)Ac").map({ $0.isFinite && $0 >= max(1200, minimum) * 0.8 }) == true else {
                     if clock() - (restoringStoppedFans[fan] ?? clock()) >= 12 {
-                        throw FanMaclyError.message("Не подтверждён запуск вентилятора \(fan + 1) перед возвратом автоматики.")
+                        throw FanMaclyError.message("Не подтверждён запуск \(names.genitive(fan)) перед возвратом автоматики.")
                     }
                     throw FanControlPreparing()
                 }
@@ -167,14 +171,14 @@ public final class FanModeController {
     public func setTarget(_ rpm: Double, fan: Int) throws {
         let current = mode(fan: fan)
         guard current?.value == 1 else {
-            throw FanControlLost(fan: fan, observedMode: current?.value)
+            throw FanControlLost(fan: fan, observedMode: current?.value, names: names)
         }
         try keepHandoff()
         if rpm > 0, startingStoppedFans[fan] != nil || registers.number("F\(fan)Ac") == 0 {
             guard let minimum = registers.number("F\(fan)Mn"), minimum.isFinite,
                   let maximum = registers.number("F\(fan)Mx"), maximum.isFinite,
                   max(1200, minimum) <= maximum else {
-                throw FanMaclyError.message("Неизвестен рабочий диапазон для запуска вентилятора \(fan + 1).")
+                throw FanMaclyError.message("Неизвестен рабочий диапазон для запуска \(names.genitive(fan)).")
             }
             let startingRPM = max(max(1200, minimum), min(2500, maximum))
             if rpm < startingRPM {
@@ -182,7 +186,7 @@ public final class FanModeController {
                 try writeConfirmedTarget(startingRPM, fan: fan)
                 guard registers.number("F\(fan)Ac").map({ $0.isFinite && $0 >= max(1200, minimum) * 0.8 }) == true else {
                     if clock() - (startingStoppedFans[fan] ?? clock()) >= 6 {
-                        throw FanMaclyError.message("Не подтверждён повторный запуск вентилятора \(fan + 1).")
+                        throw FanMaclyError.message("Не подтверждён повторный запуск \(names.genitive(fan)).")
                     }
                     throw FanControlPreparing()
                 }
@@ -242,7 +246,7 @@ public final class FanModeController {
         }
         let now = clock()
         if let pending = targetWrites[fan], pending.rpm == rpm {
-            guard now - pending.started < 4 else { throw FanMaclyError.message("SMC не подтвердил целевые обороты вентилятора \(fan + 1) за 4 секунды.") }
+            guard now - pending.started < 4 else { throw FanMaclyError.message("SMC не подтвердил целевые обороты \(names.genitive(fan)) за 4 секунды.") }
             if now - pending.last >= 1 {
                 try registers.writeNumber(key, rpm)
                 targetWrites[fan] = (rpm, pending.started, now)

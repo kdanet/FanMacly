@@ -341,7 +341,7 @@ public final class ControlEngine {
     private func handleLost(_ lost: FanControlLost, now: TimeInterval) {
         reacquireTimes = reacquireTimes.filter { now - $0 < policy.reacquireWindow } + [now]
         if reacquireTimes.count > policy.reacquireLimit {
-            suspend(.conflict, "Вентилятор \(lost.fan + 1) постоянно возвращается под управление macOS. Возможно, вентиляторами управляет другое приложение.", now: now)
+            suspend(.conflict, "\(lost.names.subject(lost.fan)) постоянно возвращается под управление macOS. Возможно, вентиляторами управляет другое приложение.", now: now)
             return
         }
         acquired.remove(lost.fan)
@@ -351,7 +351,7 @@ public final class ControlEngine {
         status.preparing = true
         status.preparationStage = .handoff
         preparationDeadline = now + policy.handoffTimeout
-        record(.warning, lost.observedMode == nil ? "Не прочитан режим вентилятора \(lost.fan + 1)" : "macOS забрала вентилятор \(lost.fan + 1)",
+        record(.warning, lost.observedMode == nil ? "Не прочитан режим \(lost.names.genitive(lost.fan))" : "macOS забрала \(lost.names.nominative(lost.fan))",
                detail: "Забираем обратно (\(reacquireTimes.count) из \(policy.reacquireLimit) за \(Int(policy.reacquireWindow / 60)) мин).")
     }
 

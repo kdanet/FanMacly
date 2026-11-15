@@ -24,6 +24,10 @@ struct PanelView: View {
         }
         .padding(14)
         .frame(width: 340)
+        // The popover's Liquid Glass is nearly clear: in light mode over a dark
+        // window (or the reverse) the text lost its contrast. A near-opaque
+        // window colour keeps the panel readable whatever is behind it.
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.9).ignoresSafeArea())
         .animation(.easeOut(duration: 0.18), value: model.controlState)
     }
 }
@@ -57,11 +61,6 @@ private struct PanelHeader: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            ZStack {
-                Circle().fill(stateColor.opacity(0.16))
-                FanGlyph(rpm: model.averageRPM, color: stateColor, size: 21)
-            }
-            .frame(width: 34, height: 34)
             VStack(alignment: .leading, spacing: 1) {
                 Text(model.title(for: model.displayedSelection))
                     .font(.system(size: 15, weight: .semibold))
@@ -100,15 +99,6 @@ private struct PanelHeader: View {
             .fixedSize()
             .focusEffectDisabled()
             .accessibilityLabel("Меню FanMacly")
-        }
-    }
-
-    private var stateColor: Color {
-        switch model.controlState {
-        case .active: return model.helper.status.coolingBoost ? .orange : .accentColor
-        case .suspended, .reacquiring: return .orange
-        case .applying: return .accentColor
-        case .macOS, .connecting, .setupNeeded: return .secondary
         }
     }
 
@@ -368,26 +358,36 @@ private struct FanRow: View {
     let fan: FanReading
     let manual: Bool
     @State private var position: Double?
+    @State private var dragging = false
 
     var body: some View {
+        // The fan spans the name and caption lines; manual controls sit under the text.
+        HStack(alignment: .top, spacing: 9) {
+            FanGlyph(rpm: fan.current, size: 26)
+                .padding(.top, 1)
+            details
+        }
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var details: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                FanGlyph(rpm: fan.current)
-                Text(fan.name).font(.system(size: 12, weight: .medium))
+                // The name never truncates; the sparkline gives way instead.
+                Text(model.snapshot.fanNames.title(fan.id)).font(.system(size: 12, weight: .medium)).fixedSize()
                 Spacer(minLength: 6)
                 Sparkline(values: model.history.fanSeries(fan.id, duration: 600))
-                    .frame(width: 64, height: 16)
+                    .frame(minWidth: 28, maxWidth: 64, minHeight: 16, maxHeight: 16)
                 Text(rpmNumber(fan.current))
                     .font(.system(size: 13, weight: .semibold).monospacedDigit())
                     .frame(minWidth: 44, alignment: .trailing)
                     .contentTransition(.numericText())
                 Text("об/мин").font(.system(size: 10)).foregroundStyle(.secondary)
             }
-            Text(caption).font(.system(size: 10.5).monospacedDigit()).foregroundStyle(.secondary).padding(.leading, 26)
-            if manual { manualControls.padding(.leading, 26) }
+            Text(caption).font(.system(size: 10.5).monospacedDigit()).foregroundStyle(.secondary)
+            if manual { manualControls }
         }
-        .padding(.vertical, 6)
-        .accessibilityElement(children: .contain)
     }
 
     private var caption: String {
@@ -403,9 +403,11 @@ private struct FanRow: View {
         let desired = model.manualTargets[fan.id] ?? fan.current ?? fan.safeMinimum
         return HStack(spacing: 6) {
             Slider(value: Binding(get: { position ?? scale.position(for: desired) }, set: { value in
-                position = value
-                model.setManualTarget(scale.rpm(at: value), fan: fan.id, commit: false)
+                // Keyboard and VoiceOver steps arrive without an editing phase: send each one.
+                position = dragging ? value : nil
+                model.setManualTarget(scale.rpm(at: value), fan: fan.id, commit: !dragging)
             }), in: 0...100) { editing in
+                dragging = editing
                 if !editing, let position {
                     model.setManualTarget(scale.rpm(at: position), fan: fan.id, commit: true)
                     self.position = nil
@@ -413,7 +415,7 @@ private struct FanRow: View {
             }
             .controlSize(.small)
             .disabled(!model.canControl)
-            .accessibilityLabel("Обороты: \(fan.name)")
+            .accessibilityLabel("Обороты: \(model.snapshot.fanNames.nominative(fan.id))")
             .accessibilityValue(rpm(model.manualTargets[fan.id]))
             Text(desired == 0 ? "Стоп" : rpmNumber(desired))
                 .font(.system(size: 10.5).monospacedDigit()).frame(width: 40, alignment: .trailing)

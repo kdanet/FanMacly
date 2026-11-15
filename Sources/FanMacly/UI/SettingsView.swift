@@ -5,16 +5,83 @@ import FanMaclyCore
 
 struct SettingsView: View {
     let model: AppModel
-    var body: some View {
-        TabView {
-            GeneralSettings(model: model).tabItem { Label("Основные", systemImage: "gearshape") }
-            MenuBarSettingsView(model: model).tabItem { Label("Строка меню", systemImage: "menubar.rectangle") }
-            AutomationSettingsView(model: model).tabItem { Label("Автоматизация", systemImage: "wand.and.stars") }
-            HelperSettings(model: model).tabItem { Label("Компонент", systemImage: "lock.shield") }
-            DiagnosticsSettings(model: model).tabItem { Label("Диагностика", systemImage: "stethoscope") }
+    enum Tab: String, CaseIterable, Identifiable {
+        case general = "Основные", menuBar = "Строка меню", automation = "Автоматизация", helper = "Компонент", diagnostics = "Диагностика"
+        var id: String { rawValue }
+        /// `--settings-tab=menuBar` opens a tab directly (screenshots, previews).
+        static var launchTab: Tab {
+            let name = CommandLine.arguments.first { $0.hasPrefix("--settings-tab=") }?.dropFirst("--settings-tab=".count)
+            return allCases.first { "\($0)" == name.map(String.init) } ?? .general
         }
-        .padding(20)
+        var symbol: String {
+            switch self {
+            case .general: return "gearshape"
+            case .menuBar: return "menubar.rectangle"
+            case .automation: return "wand.and.stars"
+            case .helper: return "lock.shield"
+            case .diagnostics: return "stethoscope"
+            }
+        }
+    }
+    @State private var tab: Tab = .launchTab
+
+    // Icon-over-label tabs, as in macOS settings windows. A TabView draws a
+    // bordered box around the grouped forms (a stray frame), and a segmented
+    // picker makes every segment as wide as «Автоматизация»: five of them do
+    // not fit the window.
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 2) {
+                ForEach(Tab.allCases) { item in
+                    SettingsTabButton(title: item.rawValue, symbol: item.symbol, selected: tab == item) { tab = item }
+                }
+            }
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity)
+            .background(.bar)
+            Divider()
+            Group {
+                switch tab {
+                case .general: GeneralSettings(model: model)
+                case .menuBar: MenuBarSettingsView(model: model)
+                case .automation: AutomationSettingsView(model: model)
+                case .helper: HelperSettings(model: model)
+                case .diagnostics: DiagnosticsSettings(model: model)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
         .frame(width: 560, height: 470)
+    }
+}
+
+private struct SettingsTabButton: View {
+    let title: String
+    let symbol: String
+    let selected: Bool
+    let action: () -> Void
+    @State private var hovering = false
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: symbol).font(.system(size: 17, weight: .regular)).frame(height: 20)
+                // Sized for the bold face, so selecting a tab does not shift its neighbours.
+                Text(title).font(.system(size: 11, weight: .semibold)).lineLimit(1).fixedSize().hidden()
+                    .overlay { Text(title).font(.system(size: 11, weight: selected ? .semibold : .regular)).lineLimit(1).fixedSize() }
+            }
+            .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.primary.opacity(selected ? 0.08 : hovering ? 0.05 : 0))
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 }
 
@@ -73,8 +140,8 @@ private struct MenuBarSettingsView: View {
                 ForEach(MenuBarSettings.AnimationSpeed.allCases, id: \.self) { Text($0.title).tag($0) }
             }
             .disabled(!model.menuBarSettings.animated)
-            Toggle("Подсвечивать значок, когда управляет FanMacly", isOn: bind(\.tintsWhenActive))
-            Text("Цвет значка: обычный — управляет macOS; акцентный — свой режим; оранжевый — буст, максимальное охлаждение или режим приостановлен.")
+            Toggle("Подсвечивать значок, когда FanMacly не управляет", isOn: bind(\.highlightsLostControl))
+            Text("Значок становится оранжевым, если выбранный режим сейчас не действует: защита временно отдала вентиляторы macOS, их перехватывает другое приложение или системный компонент не установлен. В режиме «Авто» значок обычный.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .formStyle(.grouped)

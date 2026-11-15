@@ -79,10 +79,11 @@ import WidgetKit
             DispatchQueue.main.async { window.makeFirstResponder(nil) }
             debugWindow = window
         }
-        if let window = CommandLine.arguments.first(where: { $0.hasPrefix("--open-window=") }).flatMap({ AppWindow(rawValue: String($0.dropFirst("--open-window=".count))) }) {
+        // Debug/screenshot aid; may be repeated to open several windows.
+        for window in CommandLine.arguments.filter({ $0.hasPrefix("--open-window=") }).compactMap({ AppWindow(rawValue: String($0.dropFirst("--open-window=".count))) }) {
             DispatchQueue.main.async { [weak self] in self?.windows.show(window) }
         }
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.5.0"
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0"
         if UserDefaults.standard.string(forKey: "lastPresentedVersion") != version || CommandLine.arguments.contains("--show-panel") {
             UserDefaults.standard.set(version, forKey: "lastPresentedVersion")
             DispatchQueue.main.async { [weak self] in self?.showPopover() }
@@ -92,7 +93,7 @@ import WidgetKit
         let prefs = model.menuBarSettings
         fanIcon?.setSpeed(FanIndicator.revolutionsPerSecond(for: snapshot,
             animated: prefs.animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, multiplier: prefs.speed.multiplier))
-        fanIcon?.tint = prefs.tintsWhenActive ? statusTint : nil
+        fanIcon?.tint = prefs.highlightsLostControl ? AppDelegate.statusTint(model.controlState, selection: model.displayedSelection) : nil
         if let button = statusItem.button {
             let title: String
             switch prefs.display {
@@ -112,18 +113,20 @@ import WidgetKit
             if statusItem.length != length { statusItem.length = length }
             layoutStatusIcon()
         }
-        let readings = snapshot?.fans.map { "\($0.name): \(rpm($0.current))" }.joined(separator: "\n") ?? "Нет текущих данных"
+        let readings = snapshot.map { snapshot in
+            snapshot.fans.map { "\(snapshot.fanNames.title($0.id)): \(rpm($0.current))" }.joined(separator: "\n")
+        } ?? "Нет текущих данных"
         let mode = model.title(for: model.displayedSelection)
         statusItem?.button?.toolTip = "FanMacly · \(mode)\nCPU: \(temperature(model.cpuTemperature))\n\(readings)"
         statusItem?.button?.setAccessibilityValue("Режим \(mode). CPU \(temperature(model.cpuTemperature)). \(readings)")
     }
-    private var statusTint: NSColor? {
-        switch model.controlState {
+    /// Orange while the chosen mode is not in effect; plain otherwise, including a deliberate «Авто».
+    static func statusTint(_ state: ControlState, selection: ModeSelection) -> NSColor? {
+        switch state {
         case .suspended, .reacquiring: return .systemOrange
-        case .active, .applying:
-            return model.helper.status.coolingBoost ? .systemOrange : .controlAccentColor
-        case .macOS: return model.boostUntil != nil ? .systemOrange : nil
-        case .setupNeeded, .connecting: return nil
+        case .macOS, .setupNeeded: return selection == .automatic ? nil : .systemOrange
+        // A short startup state; tinting it would flash on every launch.
+        case .active, .applying, .connecting: return nil
         }
     }
     private func layoutStatusIcon() {

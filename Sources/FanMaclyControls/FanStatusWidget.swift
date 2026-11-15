@@ -36,13 +36,15 @@ struct FanStatusWidgetView: View {
         }
     }
     @ViewBuilder private func content(_ snapshot: WidgetSnapshot) -> some View {
-        let tint: Color = snapshot.warning ? .orange : snapshot.active ? .accentColor : .secondary
+        // The app refreshes the snapshot every minute while it runs.
+        let stale = entry.date.timeIntervalSince(snapshot.date) > 10 * 60
+        let tint: Color = stale ? .secondary : snapshot.warning ? .orange : snapshot.active ? .accentColor : .secondary
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Image(systemName: snapshot.symbol).foregroundStyle(tint)
                 Text(snapshot.mode).font(.headline).lineLimit(1)
             }
-            Text(snapshot.state).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+            Text(stale ? "FanMacly не запущен" : snapshot.state).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
             Spacer(minLength: 0)
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 metric("CPU", snapshot.cpu.map { "\(Int($0.rounded()))°" } ?? "—")
@@ -58,7 +60,7 @@ struct FanStatusWidgetView: View {
                 .font(.caption)
                 .buttonStyle(.bordered)
             }
-            Text("Обновлено \(snapshot.date.formatted(date: .omitted, time: .shortened))").font(.system(size: 9)).foregroundStyle(.tertiary)
+            Text("Обновлено \(snapshot.date.formatted(Calendar.current.isDateInToday(snapshot.date) ? .dateTime.hour().minute() : .dateTime.day().month().hour().minute()))").font(.system(size: 9)).foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }

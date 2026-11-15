@@ -21,6 +21,8 @@ import FanMaclyCore
     @ObservationIgnored private var connection: NSXPCConnection?
     @ObservationIgnored private var lastReply = ProcessInfo.processInfo.systemUptime
     private var pendingID: UUID?
+    /// Completes the in-flight request; called with an error if the connection drops first.
+    @ObservationIgnored private var pendingFinish: ((String?) -> Void)?
     @ObservationIgnored private var connectionID: UUID?
     @ObservationIgnored private var requirement: String?
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
@@ -125,6 +127,7 @@ import FanMaclyCore
             completed = true
             completion?(result)
         }
+        pendingFinish = finish
         remote.apply(data) { [weak self] data, error in
             Task { @MainActor in
                 guard let self else { return }
@@ -133,6 +136,7 @@ import FanMaclyCore
                 if let data { self.receive(data) }
                 if self.pendingID == id {
                     self.pendingID = nil
+                    self.pendingFinish = nil
                     if let error { self.error = error }
                 }
                 finish(error)
@@ -142,11 +146,14 @@ import FanMaclyCore
             try? await Task.sleep(for: .seconds(8))
             guard let self, self.pendingID == id else { return }
             self.pendingID = nil
+            self.pendingFinish = nil
             self.error = Self.timeoutMessage
             finish(Self.timeoutMessage)
         }
     }
     static let timeoutMessage = "Системный компонент не подтвердил изменение."
+    /// The connection dropped before the helper answered; AppModel re-sends.
+    static let disconnectedMessage = "Связь с системным компонентом прервалась."
 
     func register() {
         guard serviceTask == nil else { return }
@@ -230,12 +237,15 @@ import FanMaclyCore
         refreshTask?.cancel()
         refreshTask = nil
         pendingID = nil
+        let finish = pendingFinish
+        pendingFinish = nil
         lastSequence = nil
         connectionID = nil
         connection?.invalidate()
         connection = nil
         connected = false
         onDisconnect?()
+        finish?(Self.disconnectedMessage)
     }
 
     private func trace(_ event: String, data: Data) {
