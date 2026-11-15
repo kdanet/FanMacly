@@ -4,8 +4,9 @@
     <key>Label</key><string>app.fanmacly.helper</string>
     <key>BundleProgram</key><string>Contents/MacOS/FanMaclyHelper</string>
     <key>MachServices</key><dict><key>app.fanmacly.helper</key><true/></dict>
-    <key>KeepAlive</key><true/>
+    <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
     <key>RunAtLoad</key><true/>
     <key>ProcessType</key><string>Interactive</string>
     <key>ThrottleInterval</key><integer>3</integer>
+    <key>ExitTimeOut</key><integer>30</integer>
 </dict></plist>

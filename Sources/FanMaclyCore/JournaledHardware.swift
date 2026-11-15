@@ -32,6 +32,7 @@ public final class JournaledHardware: FanHardware {
         // One failed fan must not prevent independent fans from returning to
         // macOS. Failed entries stay journaled for the next recovery attempt.
         var failure: Error?
+        hardware.adopt(fans: owned)
         for fan in owned.sorted() {
             do { try setManual(false, fan: fan) }
             catch { if failure == nil { failure = error } }
@@ -42,6 +43,7 @@ public final class JournaledHardware: FanHardware {
     public func setTarget(_ rpm: Double, fan: Int) throws { try hardware.setTarget(rpm, fan: fan) }
     public func forgetFan(_ fan: Int) { hardware.forgetFan(fan) }
     public func releaseHandoff() throws { try hardware.releaseHandoff() }
+    public func adopt(fans: Set<Int>) { hardware.adopt(fans: fans) }
     public func setManual(_ manual: Bool, fan: Int) throws {
         if manual {
             let next = owned.union([fan])
@@ -50,9 +52,11 @@ public final class JournaledHardware: FanHardware {
             try hardware.setManual(true, fan: fan)
         } else {
             try hardware.setManual(false, fan: fan)
-            let next = owned.subtracting([fan])
-            try persist(next)
-            owned = next
+            // The fan is already back with macOS. A failed journal write only
+            // means one harmless extra recovery attempt after the next launch;
+            // throwing would keep the fan "restoring" forever.
+            owned.remove(fan)
+            try? persist(owned)
         }
     }
     private func persist(_ fans: Set<Int>) throws {

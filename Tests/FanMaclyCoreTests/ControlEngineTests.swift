@@ -446,4 +446,17 @@ final class ControlEngineTests: XCTestCase {
         XCTAssertEqual(mock.modes.last?.0, 0)
         XCTAssertEqual(mock.modes.last?.1, false)
     }
+
+    func testRequestFieldsAreBounded() throws {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let subject = ControlEngine(hardware: MockHardware(), date: { start })
+        let name = String(repeating: "Очень длинное имя ", count: 20) + "\u{1B}[31m"
+        _ = try subject.apply(.init(mode: .curve, curve: .quiet, profileID: "x", profileName: name,
+                                    boost: .init(until: .distantFuture, thenSystem: false)), now: 0)
+        let intent = try XCTUnwrap(subject.status.intent)
+        XCTAssertEqual(intent.boost?.until, start.addingTimeInterval(ControlPolicy.standard.boostLimit))
+        XCTAssertEqual(intent.profileName?.count, 64)
+        XCTAssertFalse(intent.profileName?.contains("\u{1B}") ?? true)
+        XCTAssertThrowsError(try subject.apply(.init(mode: .manual, targets: [42: 3000]), now: 1))
+    }
 }

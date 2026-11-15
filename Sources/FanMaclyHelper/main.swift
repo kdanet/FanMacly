@@ -112,9 +112,31 @@ final class HelperService: NSObject, FanHelperProtocol, NSXPCListenerDelegate {
     }
 }
 
-guard getuid() == 0, HelperIdentity.team != nil else {
+// Take over SIGTERM/SIGINT before anything touches the fans. With the default
+// action, a signal during startup recovery (an app update, unregistering the
+// helper) would kill the process with a fan still in manual mode.
+let terminationSignals = [SIGTERM, SIGINT]
+terminationSignals.forEach { signal($0, SIG_IGN) }
+final class EarlyTermination: @unchecked Sendable {
+    private let lock = NSLock()
+    private var requested = false
+    var isRequested: Bool { lock.withLock { requested } }
+    func request() { lock.withLock { requested = true } }
+}
+let earlyTermination = EarlyTermination()
+let earlySignalSources = terminationSignals.map { number -> DispatchSourceSignal in
+    let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
+    source.setEventHandler { earlyTermination.request() }
+    source.resume()
+    return source
+}
+
+// Conditions that cannot change by relaunching exit successfully: launchd
+// relaunches the helper only after an unsuccessful exit (KeepAlive.SuccessfulExit).
+guard getuid() == 0, HelperIdentity.team != nil,
+      let requirement = HelperIdentity.requirement(identifier: HelperIdentity.app) else {
     fputs("FanMaclyHelper must be signed and started as a system daemon by macOS.\n", stderr)
-    exit(1)
+    exit(0)
 }
 let hardware: JournaledHardware
 let smc = SMCClient()
@@ -124,9 +146,10 @@ do {
     try smc.open()
     hardware = try JournaledHardware(hardware: smc, journalURL: URL(fileURLWithPath: "/var/db/app.fanmacly/controlled-fans.json"))
 } catch {
-    // Without AppleSMC there is nothing to control or recover.
+    // Without AppleSMC (an Intel Mac, a virtual machine) no fan can have been
+    // taken over, so there is nothing to recover and nothing to control.
     log.fault("could not open SMC: \(error.localizedDescription, privacy: .public)")
-    exit(1)
+    exit(0)
 }
 // A stopped fan is restarted before it can return to automatic mode, so
 // recovery may need a few seconds of retries. If it still fails, start anyway:
@@ -147,25 +170,27 @@ let service = HelperService(hardware: hardware,
                             diagnostics: { smc.fanDiagnostics() })
 service.engine.adoptUnrecovered(hardware.unrecovered)
 let listener = NSXPCListener(machServiceName: HelperIdentity.helper)
-if let requirement = HelperIdentity.requirement(identifier: HelperIdentity.app) {
-    listener.setConnectionCodeSigningRequirement(requirement)
-}
+listener.setConnectionCodeSigningRequirement(requirement)
 listener.delegate = service
-service.start()
-let signalSources = [SIGTERM, SIGINT].map { number -> DispatchSourceSignal in
-    signal(number, SIG_IGN)
-    let source = DispatchSource.makeSignalSource(signal: number, queue: service.queue)
-    source.setEventHandler {
-        service.terminating = true
-        do {
-            try service.engine.shutdown()
-            if service.engine.isShutDown { exit(0) }
-        }
-        catch { log.error("restore failed: \(error.localizedDescription, privacy: .public)") }
-        // Stay alive to retry the reset instead of abandoning a failed restore.
+
+/// Returns every fan to macOS, then exits. If that fails the helper stays
+/// alive and the control loop keeps retrying (see ControlEngine.retryRestore).
+func terminate() {
+    service.terminating = true
+    do {
+        try service.engine.shutdown()
+        if service.engine.isShutDown { exit(0) }
     }
+    catch { log.error("restore failed: \(error.localizedDescription, privacy: .public)") }
+}
+let signalSources = terminationSignals.map { number -> DispatchSourceSignal in
+    let source = DispatchSource.makeSignalSource(signal: number, queue: service.queue)
+    source.setEventHandler(handler: terminate)
     source.resume()
     return source
 }
+earlySignalSources.forEach { $0.cancel() }
+service.start()
+if earlyTermination.isRequested { service.queue.async(execute: terminate) }
 listener.resume()
 RunLoop.main.run()

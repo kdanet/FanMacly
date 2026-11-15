@@ -2,7 +2,10 @@ import Foundation
 import Security
 
 public enum HelperIdentity {
-    public static let protocolVersion = "1.0.5"
+    /// Versions the app–helper contract (XPC messages, status format, launchd
+    /// plist), independent of the app version. A mismatch makes the app
+    /// replace the installed helper with the bundled one.
+    public static let protocolVersion = "1.0.6"
     public static let app = "app.fanmacly"
     public static let helper = "app.fanmacly.helper"
     public static let plist = "app.fanmacly.helper.plist"

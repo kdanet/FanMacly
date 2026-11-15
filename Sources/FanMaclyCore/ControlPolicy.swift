@@ -33,6 +33,8 @@ public struct ControlPolicy: Codable, Equatable, Sendable {
     /// …and the global handoff (Ftst) is cleared after this long regardless.
     public var restoreGiveUp: TimeInterval = 15
     public var targetTimeout: TimeInterval = 6
+    /// Longest boost the helper accepts; later end times are clamped.
+    public var boostLimit: TimeInterval = 4 * 3600
     /// Automatic resume after a protective handback.
     public var resumeAfter: TimeInterval = 60
     public var resumeStableFor: TimeInterval = 10

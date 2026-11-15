@@ -196,6 +196,13 @@ public final class FanModeController {
     /// calls this because the previous process may have cleared Ftst a moment ago.
     public func deferHandoff() { handoffReleasedAt = clock() }
 
+    /// Fans a previous helper process left in manual mode (crash journal).
+    /// Counting them as managed keeps Ftst raised until the last one is back,
+    /// so returning the first fan does not strand the others in manual mode.
+    public func adopt(fans: Set<Int>) {
+        managed.formUnion(fans.filter { (0..<10).contains($0) })
+    }
+
     /// Give the global handoff back to macOS even while fans are still marked
     /// as managed. Used when returning a fan keeps failing: thermalmonitord
     /// then reclaims the fan itself instead of leaving it on a stale target.

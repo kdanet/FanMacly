@@ -43,6 +43,8 @@ public final class SMCClient: SMCRegisters {
     public func deferHandoff() { fanModes.deferHandoff() }
     /// See `FanModeController.releaseHandoff()`.
     public func releaseHandoff() throws { try fanModes.releaseHandoff() }
+    /// See `FanModeController.adopt(fans:)`.
+    public func adopt(fans: Set<Int>) { fanModes.adopt(fans: fans) }
     public func open() throws {
         #if !arch(arm64)
         throw FanMaclyError.message("FanMacly поддерживает только Mac с Apple Silicon.")
@@ -123,7 +125,7 @@ public final class SMCClient: SMCRegisters {
     public func setTarget(_ rpm: Double, fan: Int) throws { try fanModes.setTarget(rpm, fan: fan) }
     public func forgetFan(_ fan: Int) { fanModes.forget(fan: fan) }
     public func fanDiagnostics() -> String {
-        let count = min(10, max(0, Int(number("FNum") ?? 0)))
+        let count = number("FNum").flatMap { $0 >= 0 && $0 <= 10 ? Int($0) : nil } ?? 0
         let keys = ["Ftst"] + (0..<count).flatMap { ["F\($0)Md", "F\($0)md", "F\($0)Tg", "F\($0)Ac"] }
         return keys.compactMap { key in number(key).map { "\(key)=\(String(format: "%.1f", $0))" } }.joined(separator: " ")
     }

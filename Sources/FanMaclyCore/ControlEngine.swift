@@ -8,10 +8,13 @@ public protocol FanHardware: AnyObject {
     func forgetFan(_ fan: Int)
     /// Clear the global handoff (Ftst) regardless of which fans are managed.
     func releaseHandoff() throws
+    /// Treat fans a previous process left manual as owned (crash recovery).
+    func adopt(fans: Set<Int>)
 }
 public extension FanHardware {
     func forgetFan(_ fan: Int) {}
     func releaseHandoff() throws {}
+    func adopt(fans: Set<Int>) {}
 }
 extension SMCClient: FanHardware {}
 
@@ -104,6 +107,21 @@ public final class ControlEngine {
 
     public func heartbeat(now: TimeInterval) -> HelperStatus { status }
 
+    /// Bounds the free-form fields of a request: the boost end (it is persisted
+    /// and survives reboots) and the names that end up in logs and the UI.
+    private func sanitized(_ request: ControlRequest) -> ControlRequest {
+        var request = request
+        if let until = request.boost?.until {
+            request.boost?.until = min(until, date().addingTimeInterval(policy.boostLimit))
+        }
+        func clean(_ text: String?) -> String? {
+            text.map { String(String.UnicodeScalarView($0.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }).prefix(64)) }
+        }
+        request.profileID = clean(request.profileID)
+        request.profileName = clean(request.profileName)
+        return request
+    }
+
     /// Fans a previous helper process left in manual mode and startup recovery
     /// could not return: keep retrying (with the same fallback) from the loop.
     public func adoptUnrecovered(_ fans: Set<Int>) {
@@ -115,8 +133,9 @@ public final class ControlEngine {
 
     /// Throws only for an invalid request. Runtime conditions (heat, sensors,
     /// SMC) are reported through `status.suspension`.
-    public func apply(_ next: ControlRequest, now: TimeInterval) throws -> HelperStatus {
+    public func apply(_ request: ControlRequest, now: TimeInterval) throws -> HelperStatus {
         guard !shuttingDown else { throw FanMaclyError.message("Системный компонент завершает работу.") }
+        let next = sanitized(request)
         if next.mode == .system {
             guard next.boost == nil else { throw FanMaclyError.message("Буст требует режима вентиляторов.") }
             let hadIntent = intent != nil
@@ -136,7 +155,8 @@ public final class ControlEngine {
                     throw FanMaclyError.message("Укажите обороты для каждого обнаруженного вентилятора.")
                 }
             }
-            guard next.targets.values.allSatisfy({ $0.isFinite && $0 >= 0 }) else {
+            guard next.targets.keys.allSatisfy({ (0..<10).contains($0) }),
+                  next.targets.values.allSatisfy({ $0.isFinite && $0 >= 0 }) else {
                 throw FanMaclyError.message("Некорректные обороты.")
             }
         }

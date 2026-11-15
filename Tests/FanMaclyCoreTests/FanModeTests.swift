@@ -24,6 +24,16 @@ private final class Registers: SMCRegisters {
     }
 }
 
+/// SMC-like hardware behind the crash journal, as the helper builds it.
+private final class RecoveringHardware: FanHardware {
+    let registers = Registers()
+    lazy var modes = FanModeController(registers: registers)
+    func snapshot() -> HardwareSnapshot { .init(fans: [], fanCount: 2) }
+    func setManual(_ manual: Bool, fan: Int) throws { try modes.setManual(manual, fan: fan) }
+    func setTarget(_ rpm: Double, fan: Int) throws { try modes.setTarget(rpm, fan: fan) }
+    func adopt(fans: Set<Int>) { modes.adopt(fans: fans) }
+}
+
 private final class UnlockHardware: FanHardware {
     let registers = Registers()
     lazy var modes = FanModeController(registers: registers)
@@ -37,6 +47,31 @@ private final class UnlockHardware: FanHardware {
 }
 
 final class FanModeTests: XCTestCase {
+    func testCrashRecoveryKeepsHandoffUntilEveryStoppedFanIsBack() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("controlled-fans.json")
+        try JSONEncoder().encode([0, 1]).write(to: url)
+        let hardware = RecoveringHardware()
+        hardware.registers.values.merge(["Ftst": 1, "F0Md": 1, "F1Md": 1, "F0Ac": 0, "F1Ac": 0, "F0Tg": 0, "F1Tg": 0,
+                                         "F0Mn": 1350, "F1Mn": 1350, "F0Mx": 5777, "F1Mx": 5777]) { _, new in new }
+        // A fresh helper process: nothing is managed yet, both fans are stopped in manual mode.
+        let journal = try JournaledHardware(hardware: hardware, journalURL: url)
+        XCTAssertThrowsError(try journal.recover()) { XCTAssertTrue($0 is FanControlPreparing) }
+        XCTAssertEqual(hardware.registers.values["F0Tg"], 2500)
+        XCTAssertEqual(hardware.registers.values["F1Tg"], 2500)
+        hardware.registers.values["F0Ac"] = 2400
+        XCTAssertThrowsError(try journal.recover())
+        XCTAssertEqual(hardware.registers.values["F0Md"], 0)
+        XCTAssertEqual(hardware.registers.values["Ftst"], 1, "Ftst stays raised while fan 2 is still manual")
+        XCTAssertEqual(journal.unrecovered, [1])
+        hardware.registers.values["F1Ac"] = 2400
+        try journal.recover()
+        XCTAssertEqual(hardware.registers.values["F1Md"], 0)
+        XCTAssertEqual(hardware.registers.values["Ftst"], 0)
+        XCTAssertTrue(journal.unrecovered.isEmpty)
+    }
     func testRestartAtMinimumUsesStartingPulseAndStopCancelsIt() throws {
         let registers = Registers()
         registers.values.merge(["F0Md": 1, "F0Tg": 0, "F0Ac": 0, "F0Mn": 1350, "F0Mx": 5777]) { _, new in new }
