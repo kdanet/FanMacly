@@ -64,7 +64,8 @@ final class TargetTransitionTests: XCTestCase {
         _ = engine.heartbeat(now: 5)
         engine.tick(now: 6)
         XCTAssertEqual(engine.status.mode, .system)
-        XCTAssertTrue(engine.status.message?.contains("новые обороты") == true)
+        XCTAssertTrue(engine.status.suspension?.message.contains("новые обороты") == true)
+        XCTAssertEqual(engine.status.suspension?.kind, .hardware)
         XCTAssertNil(engine.status.preparationStage)
     }
 

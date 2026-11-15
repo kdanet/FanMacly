@@ -14,10 +14,14 @@ public struct CPUControlReading: Codable, Sendable {
 }
 
 extension HardwareSnapshot {
+    /// Hottest core/die channel. Limited to the `Tp*`, `Te*` and `TC*` families
+    /// (performance/efficiency core and die aggregates); other keys that were
+    /// grouped as CPU by prefix (e.g. `TPD*`) are not core temperatures.
     public var cpuPeakReading: CPUControlReading? {
-        sensors.filter { $0.group == .cpu && $0.celsius.isFinite && (15..<125).contains($0.celsius) }
+        sensors.filter { $0.group == .cpu && $0.celsius.isFinite && (15..<125).contains($0.celsius) && Self.isCoreChannel($0.id) }
             .max(by: { $0.celsius < $1.celsius }).map { .init(source: $0.id, celsius: $0.celsius) }
     }
+    static func isCoreChannel(_ key: String) -> Bool { key.hasPrefix("Tp") || key.hasPrefix("Te") || key.hasPrefix("TC") }
     /// Prefer a slower package reading over an instantaneous hotspot. Unknown
     /// models retain the peak fallback; raw sensors are never replaced in export.
     public var cpuControlReading: CPUControlReading? {

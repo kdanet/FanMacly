@@ -47,9 +47,22 @@ target=app
         --deployment-target "$deployment" --target-triple "arm64-apple-macos$deployment" \
         --source-file-list "$metadata/$target-sources.txt" \
         --swift-const-vals-list "$metadata/$target-constants.txt" --deployment-aware-processing
+entitlements=Resources/FanMaclyControls.entitlements
+if [ -n "${APP_GROUP:-}" ]; then
+    /usr/libexec/PlistBuddy -c "Add :FanMaclyAppGroup string $APP_GROUP" "$controls/Contents/Info.plist"
+    entitlements="$PWD/build/FanMaclyControls.entitlements"
+    cat > "$entitlements" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>com.apple.security.app-sandbox</key><true/>
+    <key>com.apple.security.application-groups</key><array><string>$APP_GROUP</string></array>
+</dict></plist>
+PLIST
+fi
 if [ "$identity" = - ]; then
-    codesign --force --sign - --entitlements Resources/FanMaclyControls.entitlements "$controls"
+    codesign --force --sign - --entitlements "$entitlements" "$controls"
 else
     codesign --force --options runtime --timestamp --sign "$identity" \
-        --entitlements Resources/FanMaclyControls.entitlements "$controls"
+        --entitlements "$entitlements" "$controls"
 fi

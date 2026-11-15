@@ -36,23 +36,30 @@ final class FanStopTests: XCTestCase {
         XCTAssertEqual(hardware.targets, [0: 3000, 1: 2500])
     }
     func testManualNonzeroTargetsStillClampToRunningRange() throws {
-        for requested in [-1.0, 1, 500, 100000] {
+        for requested in [1.0, 500, 100000] {
             let hardware = MockHardware()
             let engine = ControlEngine(hardware: hardware)
             _ = try engine.apply(.init(mode: .manual, targets: [0: requested]), now: 0)
             XCTAssertEqual(hardware.targets[0], requested > 6000 ? 6000 : hardware.reading.fans[0].safeMinimum)
         }
+        XCTAssertThrowsError(try ControlEngine(hardware: MockHardware()).apply(.init(mode: .manual, targets: [0: -1]), now: 0))
     }
-    func testManualStopStillRestoresOnWatchdogMissingSensorsAndHeat() throws {
-        for reason in ["watchdog", "sensor", "heat"] {
+    func testManualStopIsOverriddenByHeatAndSuspendedOnMissingSensors() throws {
+        for reason in ["sensor", "serious", "critical"] {
             let hardware = MockHardware()
             let engine = ControlEngine(hardware: hardware)
             _ = try engine.apply(.init(mode: .manual, targets: [0: 0]), now: 0)
             if reason == "sensor" { hardware.reading.sensors = [] }
-            if reason == "heat" { hardware.reading.thermalPressure = .serious }
-            engine.tick(now: reason == "watchdog" ? 8 : 1)
-            XCTAssertEqual(engine.status.mode, .system)
-            XCTAssertEqual(hardware.modes.last?.1, false)
+            if reason == "serious" { hardware.reading.thermalPressure = .serious }
+            if reason == "critical" { hardware.reading.thermalPressure = .critical }
+            for t in stride(from: 1.0, through: 4.5, by: 1) { engine.tick(now: t) }
+            if reason == "serious" {
+                XCTAssertEqual(engine.status.mode, .manual)
+                XCTAssertEqual(hardware.targets[0], 6000, "heat overrides a stopped fan")
+            } else {
+                XCTAssertEqual(engine.status.mode, .system)
+                XCTAssertEqual(hardware.modes.last?.1, false)
+            }
         }
     }
     func testStoppedFanRestartsWhenCurveCallsForCooling() throws {
@@ -66,18 +73,18 @@ final class FanStopTests: XCTestCase {
         _ = try engine.apply(.init(mode: .curve, curve: cooling), now: 4)
         XCTAssertGreaterThan(try XCTUnwrap(hardware.targets[0]), hardware.reading.fans[0].safeMinimum)
     }
-    func testWatchdogAndSensorFailureRestoreAutomationAfterStop() throws {
-        for loseSensor in [false, true] {
-            let hardware = MockHardware()
-            let engine = ControlEngine(hardware: hardware)
-            _ = try engine.apply(.init(mode: .curve, curve: stoppingCurve), now: 0)
-            engine.tick(now: 3)
-            XCTAssertEqual(hardware.targets[0], 0)
-            if loseSensor { hardware.reading.sensors = [] }
-            engine.tick(now: loseSensor ? 4 : 8)
-            XCTAssertEqual(engine.status.mode, .system)
-            XCTAssertEqual(hardware.modes.last?.1, false)
-        }
+    func testSensorFailureRestoresAutomationAfterStopOnceGraceExpires() throws {
+        let hardware = MockHardware()
+        let engine = ControlEngine(hardware: hardware)
+        _ = try engine.apply(.init(mode: .curve, curve: stoppingCurve), now: 0)
+        engine.tick(now: 3)
+        XCTAssertEqual(hardware.targets[0], 0)
+        hardware.reading.sensors = []
+        engine.tick(now: 4)
+        XCTAssertEqual(engine.status.mode, .curve)
+        engine.tick(now: 5); engine.tick(now: 7.1)
+        XCTAssertEqual(engine.status.mode, .system)
+        XCTAssertEqual(hardware.modes.last?.1, false)
     }
     func testSustainedHotspotOverridesStopWithMaximumCooling() throws {
         let hardware = MockHardware()
@@ -86,8 +93,8 @@ final class FanStopTests: XCTestCase {
         _ = try engine.apply(.init(mode: .curve, curve: stoppingCurve), now: 0)
         engine.tick(now: 3)
         XCTAssertEqual(hardware.targets[0], 0)
-        hardware.reading.sensors.append(.init(id: "Tp01", name: "Hotspot", group: .cpu, celsius: 96))
-        engine.tick(now: 4); engine.tick(now: 6)
+        hardware.reading.sensors.append(.init(id: "Tp01", name: "Hotspot", group: .cpu, celsius: 107))
+        for t in stride(from: 4.0, through: 10, by: 1) { engine.tick(now: t) }
         XCTAssertEqual(hardware.targets[0], hardware.reading.fans[0].maximum)
     }
     func testGovernorDoesNotLeaveAnUncommandedLowRPMAtTheStopBoundary() {

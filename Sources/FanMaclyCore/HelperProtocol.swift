@@ -2,7 +2,7 @@ import Foundation
 import Security
 
 public enum HelperIdentity {
-    public static let protocolVersion = "0.8.0"
+    public static let protocolVersion = "1.0.5"
     public static let app = "app.fanmacly"
     public static let helper = "app.fanmacly.helper"
     public static let plist = "app.fanmacly.helper.plist"

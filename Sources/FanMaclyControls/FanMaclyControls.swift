@@ -7,6 +7,7 @@ struct FanMaclyControlsBundle: WidgetBundle {
         AutomaticCoolingControl()
         ProfileCoolingControl()
         MaximumCoolingControl()
+        FanStatusWidget()
     }
 }
 

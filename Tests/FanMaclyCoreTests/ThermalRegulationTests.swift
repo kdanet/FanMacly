@@ -103,18 +103,19 @@ final class ThermalRegulationTests: XCTestCase {
         engine.tick(now: 1)
         XCTAssertEqual(hardware.targets[0], initial)
         XCTAssertEqual(engine.status.controlTemperature, 50)
-        hardware.reading.sensors[1].celsius = 90
+        hardware.reading.sensors[1].celsius = 107
         engine.tick(now: 2)
         XCTAssertNotEqual(hardware.targets[0], 6000)
         hardware.reading.sensors[1].celsius = 60
         engine.tick(now: 3)
         XCTAssertNotEqual(hardware.targets[0], 6000)
-        hardware.reading.sensors[1].celsius = 90
-        engine.tick(now: 4)
-        engine.tick(now: 6)
+        hardware.reading.sensors[1].celsius = 107
+        for t in stride(from: 4.0, through: 8, by: 1) { engine.tick(now: t) }
+        XCTAssertNotEqual(hardware.targets[0], 6000, "needs 5 s of a sustained hot core")
+        engine.tick(now: 9)
         XCTAssertEqual(hardware.targets[0], 6000)
     }
-    func testSystemPressureAndSensorLossStillRestoreImmediately() throws {
+    func testCriticalPressureRestoresImmediatelyAndSensorLossAfterGrace() throws {
         for missing in [false, true] {
             let hardware = MockHardware()
             hardware.reading.sensors = [
@@ -125,6 +126,8 @@ final class ThermalRegulationTests: XCTestCase {
             _ = try engine.apply(.init(mode: .curve), now: 0)
             if missing { hardware.reading.sensors = [] } else { hardware.reading.thermalPressure = .critical }
             engine.tick(now: 1)
+            XCTAssertEqual(engine.status.mode, missing ? .curve : .system)
+            engine.tick(now: 2); engine.tick(now: 3); engine.tick(now: 4.1)
             XCTAssertEqual(engine.status.mode, .system)
             XCTAssertEqual(hardware.modes.last?.1, false)
         }

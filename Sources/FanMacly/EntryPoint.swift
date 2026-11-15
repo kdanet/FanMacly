@@ -207,7 +207,7 @@ import AppIntents
         client.refresh()
         try await Task.sleep(for: .seconds(1))
         if let error = client.error ?? client.status.message { throw FanMaclyError.message(error) }
-        if let event = client.status.thermalEvent { throw FanMaclyError.message(event.detail) }
+        if let suspension = client.status.suspension { throw FanMaclyError.message(suspension.message) }
         guard client.connected else { throw FanMaclyError.message("Нет связи с помощником.") }
     }
 }

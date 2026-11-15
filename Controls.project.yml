@@ -9,6 +9,7 @@ targets:
     sources:
       - Sources/FanMaclyControls
       - Sources/FanMacly/FanModeControlIntent.swift
+      - Sources/FanMacly/WidgetSnapshot.swift
     info:
       path: Resources/FanMaclyControls-Info.plist
       properties:

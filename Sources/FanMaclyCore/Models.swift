@@ -71,6 +71,11 @@ public struct CurvePoint: Codable, Identifiable, Equatable, Sendable {
 }
 
 public struct CoolingCurve: Codable, Equatable, Sendable {
+    /// Apple Silicon routinely runs at 85–100 °C under sustained load, so the
+    /// editable range reaches 100 °C. Speeds are free per point (a curve may
+    /// dip or end below 100 %): the helper's thermal guard still forces
+    /// maximum cooling at 95 °C regardless of the curve.
+    public static let temperatureRange: ClosedRange<Double> = 20...100
     public var points: [CurvePoint]
     public var allowsFanStop: Bool
     public init(points: [CurvePoint], allowsFanStop: Bool = false) {
@@ -83,15 +88,18 @@ public struct CoolingCurve: Codable, Equatable, Sendable {
         // Existing profiles retain their minimum-RPM meaning until opted in.
         allowsFanStop = try values.decodeIfPresent(Bool.self, forKey: .allowsFanStop) ?? false
     }
-    public static let balanced = CoolingCurve(points: [.init(40, 0), .init(55, 20), .init(65, 45), .init(75, 75), .init(85, 100)])
-    public static let cool = CoolingCurve(points: [.init(40, 20), .init(55, 45), .init(65, 65), .init(75, 90), .init(85, 100)])
+    /// Quiet: stays near the minimum through everyday work.
+    public static let quiet = CoolingCurve(points: [.init(50, 0), .init(65, 10), .init(75, 25), .init(85, 50), .init(95, 100)])
+    public static let balanced = CoolingCurve(points: [.init(45, 0), .init(60, 15), .init(70, 35), .init(80, 60), .init(92, 100)])
+    public static let cool = CoolingCurve(points: [.init(40, 15), .init(55, 35), .init(65, 55), .init(75, 80), .init(88, 100)])
     public var isValid: Bool {
         guard points.count >= 2, points.count <= 12 else { return false }
         for (index, point) in points.enumerated() {
-            guard point.temperature.isFinite, point.percent.isFinite, (20...90).contains(point.temperature), (0...100).contains(point.percent) else { return false }
-            if index > 0, point.temperature <= points[index - 1].temperature || point.percent < points[index - 1].percent { return false }
+            guard point.temperature.isFinite, point.percent.isFinite, Self.temperatureRange.contains(point.temperature),
+                  (0...100).contains(point.percent) else { return false }
+            if index > 0, point.temperature <= points[index - 1].temperature { return false }
         }
-        return points.last!.temperature <= 85 && points.last!.percent == 100
+        return true
     }
     public func percent(at temperature: Double) -> Double? {
         guard isValid, temperature.isFinite else { return nil }
@@ -102,16 +110,53 @@ public struct CoolingCurve: Codable, Equatable, Sendable {
         }
         return points.last!.percent
     }
+    /// Target RPM for one fan, honouring the optional full stop at 0 %.
+    public func rpm(at temperature: Double, fan: FanReading) -> Double? {
+        guard let percent = percent(at: temperature), let maximum = fan.maximum else { return nil }
+        if allowsFanStop && percent == 0 { return 0 }
+        return fan.safeMinimum + (maximum - fan.safeMinimum) * percent / 100
+    }
 }
 
-public struct ControlRequest: Codable, Sendable {
+/// Temporary maximum cooling. It survives app restarts because the helper
+/// persists it together with the rest of the intent.
+public struct BoostRequest: Codable, Equatable, Sendable {
+    public var until: Date
+    /// Return control to macOS when the boost ends (boost started from "Авто").
+    public var thenSystem: Bool
+    public init(until: Date, thenSystem: Bool) { self.until = until; self.thenSystem = thenSystem }
+}
+
+public struct ControlRequest: Codable, Equatable, Sendable {
     public var mode: CoolingMode
     public var targets: [Int: Double]
     public var curve: CoolingCurve
-    public var expectedFallbackID: UUID?
-    public init(mode: CoolingMode, targets: [Int: Double] = [:], curve: CoolingCurve = .balanced, expectedFallbackID: UUID? = nil) {
+    /// Stable identifier of what the user picked (preset key or profile UUID).
+    public var profileID: String?
+    public var profileName: String?
+    public var boost: BoostRequest?
+    /// Resume this intent automatically after a protective handback.
+    public var autoResume: Bool
+    /// Chosen by an automation rule or Focus, not directly by the user.
+    public var fromRule: Bool
+    public init(mode: CoolingMode, targets: [Int: Double] = [:], curve: CoolingCurve = .balanced,
+                profileID: String? = nil, profileName: String? = nil, boost: BoostRequest? = nil, autoResume: Bool = true,
+                fromRule: Bool = false) {
         self.mode = mode; self.targets = targets; self.curve = curve
-        self.expectedFallbackID = expectedFallbackID
+        self.profileID = profileID; self.profileName = profileName; self.boost = boost; self.autoResume = autoResume
+        self.fromRule = fromRule
+    }
+    private enum CodingKeys: String, CodingKey { case mode, targets, curve, profileID, profileName, boost, autoResume, fromRule }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        mode = try values.decode(CoolingMode.self, forKey: .mode)
+        targets = try values.decodeIfPresent([Int: Double].self, forKey: .targets) ?? [:]
+        curve = try values.decodeIfPresent(CoolingCurve.self, forKey: .curve) ?? .balanced
+        profileID = try values.decodeIfPresent(String.self, forKey: .profileID)
+        profileName = try values.decodeIfPresent(String.self, forKey: .profileName)
+        boost = try values.decodeIfPresent(BoostRequest.self, forKey: .boost)
+        autoResume = try values.decodeIfPresent(Bool.self, forKey: .autoResume) ?? true
+        fromRule = try values.decodeIfPresent(Bool.self, forKey: .fromRule) ?? false
     }
 }
 
@@ -120,22 +165,27 @@ public enum CoolingPreparation: String, Codable, Sendable { case handoff, target
 public struct HelperStatus: Codable, Sendable {
     public var version = HelperIdentity.protocolVersion
     public var sequence: UInt64?
-    public var coolingBoost = false
+    /// Effective mode currently applied to the hardware.
     public var mode: CoolingMode = .system
+    /// What the user asked for; persisted by the helper. nil means macOS.
+    public var intent: ControlRequest?
+    /// Why the intent is not applied right now, if it isn't.
+    public var suspension: ControlSuspension?
+    public var coolingBoost = false
+    public var boostReason: String?
     public var targets: [Int: Double] = [:]
     public var message: String?
-    public var connected = true
     public var preparing: Bool? = false
     public var restoring: Bool? = false
+    public var reacquiring = false
     public var preparationStage: CoolingPreparation?
     public var controlTemperature: Double?
     public var temperatureSource: String?
     public var rawControlTemperature: Double?
     public var peakCPUReading: CPUControlReading?
     public var temperatureSampleDate: Date?
-    public var thermalEvent: ThermalEvent?
-    public var automaticFallbackID: UUID?
     public var customControlAllowed: Bool?
+    public var events: [ControlEvent] = []
     public init() {}
 }
 

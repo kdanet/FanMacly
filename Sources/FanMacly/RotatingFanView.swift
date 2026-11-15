@@ -6,16 +6,21 @@ import QuartzCore
 @MainActor final class RotatingFanView: NSView {
     private let rotor = CALayer()
     private var revolutions = 0.0
+    /// nil = the menu bar's label colour.
+    var tint: NSColor? { didSet { if tint != oldValue { updateColor() } } }
 
-    override init(frame frameRect: NSRect) {
+    /// Used by the menu bar (18 pt) and the panel glyphs (13 pt). The rotation
+    /// runs in the render server, so it stays smooth at the display's refresh
+    /// rate and keeps its phase when the speed changes.
+    init(frame frameRect: NSRect, pointSize: CGFloat = 18) {
         super.init(frame: frameRect)
         wantsLayer = true
-        rotor.bounds = CGRect(x: 0, y: 0, width: 20, height: 20)
+        rotor.bounds = CGRect(x: 0, y: 0, width: pointSize + 2, height: pointSize + 2)
         rotor.anchorPoint = CGPoint(x: 0.5, y: 0.5)
         rotor.position = CGPoint(x: frameRect.width / 2, y: frameRect.height / 2)
         rotor.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
         let symbol = NSImage(systemSymbolName: "fanblades.fill", accessibilityDescription: nil)!
-            .withSymbolConfiguration(.init(pointSize: 18, weight: .medium))!
+            .withSymbolConfiguration(.init(pointSize: pointSize, weight: .medium))!
         let mask = CALayer()
         var symbolRect = CGRect(origin: .zero, size: symbol.size)
         if let image = symbol.cgImage(forProposedRect: &symbolRect, context: nil, hints: nil) {
@@ -38,6 +43,7 @@ import QuartzCore
         updateColor()
         setAccessibilityElement(false)
     }
+    override convenience init(frame frameRect: NSRect) { self.init(frame: frameRect, pointSize: 18) }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func layout() {
@@ -53,7 +59,7 @@ import QuartzCore
     private func updateColor() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
             CATransaction.begin(); CATransaction.setDisableActions(true)
-            rotor.backgroundColor = NSColor.labelColor.cgColor
+            rotor.backgroundColor = (tint ?? NSColor.labelColor).cgColor
             CATransaction.commit()
         }
     }

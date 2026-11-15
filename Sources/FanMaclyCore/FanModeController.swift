@@ -18,6 +18,20 @@ public struct SMCWriteFailure: LocalizedError {
 /// A retryable transition, never an acknowledgement of manual control.
 public struct FanControlPreparing: Error { public init() {} }
 
+/// The fan is no longer in manual mode (macOS, firmware or another app took it
+/// back), or its mode register could not be read. The engine re-acquires it.
+public struct FanControlLost: LocalizedError, Equatable {
+    public let fan: Int
+    /// nil when the mode register could not be read at all.
+    public let observedMode: Double?
+    public init(fan: Int, observedMode: Double?) { self.fan = fan; self.observedMode = observedMode }
+    public var errorDescription: String? {
+        observedMode == nil
+            ? "Не удалось прочитать режим вентилятора \(fan + 1)."
+            : "macOS вернула управление вентилятором \(fan + 1)."
+    }
+}
+
 /// Apple Silicon uses case-sensitive mode keys. M1–M4 commonly use `Md`,
 /// while newer firmware can expose `md`. Mode 3 requires an Ftst handoff.
 public final class FanModeController {
@@ -26,6 +40,16 @@ public final class FanModeController {
     private var modeWrites: [Int: (manual: Bool, time: TimeInterval)] = [:]
     private var targetWrites: [Int: (rpm: Double, started: TimeInterval, last: TimeInterval)] = [:]
     private var requestedHandoff = false
+    /// When Ftst = 1 was last requested, and when we last cleared it.
+    private var handoffRequestedAt: TimeInterval?
+    private var handoffReleasedAt: TimeInterval?
+    /// thermalmonitord misses an Ftst edge that arrives while it is still
+    /// reclaiming the fans (observed on M4 Max: Ftst = 1 about 1 s after a
+    /// release left both fans stopped in mode 0 with nobody driving them).
+    /// Keep Ftst low this long before raising it again…
+    public var handoffSettle: TimeInterval = 5
+    /// …and re-pulse it if no fan turned manual this long after raising it.
+    public var handoffRetryAfter: TimeInterval = 10
     private var restoringStoppedFans: [Int: TimeInterval] = [:]
     private var startingStoppedFans: [Int: TimeInterval] = [:]
     private let clock: () -> TimeInterval
@@ -86,6 +110,8 @@ public final class FanModeController {
                 try registers.writeNumber("Ftst", 0)
                 guard registers.number("Ftst") == 0 else { throw FanControlPreparing() }
                 requestedHandoff = false
+                handoffRequestedAt = nil
+                handoffReleasedAt = clock()
             }
             // A mode-3 readback can still predate an accepted manual write.
             // Retain ownership for a reconciliation interval after cancelling
@@ -102,10 +128,24 @@ public final class FanModeController {
         }
 
         managed.insert(fan)
-        if mode.value == 1 { modeWrites.removeValue(forKey: fan); return }
-        if mode.value == 3, registers.number("Ftst") == 0 {
-            requestedHandoff = true
-            try registers.writeNumber("Ftst", 1)
+        restoringStoppedFans.removeValue(forKey: fan)
+        if mode.value == 1 { modeWrites.removeValue(forKey: fan); try keepHandoff(); return }
+        // Ask thermalmonitord to yield before taking the fan, on every model
+        // that exposes Ftst. Without it the OS can silently switch a manually
+        // controlled fan back to automatic (observed on M4 Max with FnMd = 0).
+        if registers.number("Ftst") == 0 {
+            if let released = handoffReleasedAt, clock() - released < handoffSettle { throw FanControlPreparing() }
+            try requestHandoff()
+            throw FanControlPreparing()
+        }
+        if requestedHandoff, let requested = handoffRequestedAt, clock() - requested >= handoffRetryAfter,
+           managed.allSatisfy({ self.mode(fan: $0)?.value != 1 }) {
+            // The request was not picked up: lower Ftst, let thermalmonitord
+            // settle, then raise it again.
+            try registers.writeNumber("Ftst", 0)
+            handoffRequestedAt = nil
+            handoffReleasedAt = clock()
+            modeWrites.removeValue(forKey: fan)
             throw FanControlPreparing()
         }
         do {
@@ -113,9 +153,9 @@ public final class FanModeController {
         } catch let error as SMCWriteFailure {
             // The firmware can reject manual mode until thermalmonitord yields.
             guard error.ioReturn == 0, error.result == 0x82, registers.number("Ftst") != nil else { throw error }
-            if registers.number("Ftst") == 0 {
-                requestedHandoff = true
-                try registers.writeNumber("Ftst", 1)
+            if registers.number("Ftst") == 0,
+               handoffReleasedAt.map({ clock() - $0 >= handoffSettle }) ?? true {
+                try requestHandoff()
             }
             throw FanControlPreparing()
         }
@@ -125,9 +165,11 @@ public final class FanModeController {
     }
 
     public func setTarget(_ rpm: Double, fan: Int) throws {
-        guard mode(fan: fan)?.value == 1 else {
-            throw FanMaclyError.message("macOS вернула управление вентилятором \(fan + 1).")
+        let current = mode(fan: fan)
+        guard current?.value == 1 else {
+            throw FanControlLost(fan: fan, observedMode: current?.value)
         }
+        try keepHandoff()
         if rpm > 0, startingStoppedFans[fan] != nil || registers.number("F\(fan)Ac") == 0 {
             guard let minimum = registers.number("F\(fan)Mn"), minimum.isFinite,
                   let maximum = registers.number("F\(fan)Mx"), maximum.isFinite,
@@ -148,6 +190,41 @@ public final class FanModeController {
         }
         startingStoppedFans.removeValue(forKey: fan)
         try writeConfirmedTarget(rpm, fan: fan)
+    }
+
+    /// Treat the global handoff as just released. A newly started helper
+    /// calls this because the previous process may have cleared Ftst a moment ago.
+    public func deferHandoff() { handoffReleasedAt = clock() }
+
+    /// Give the global handoff back to macOS even while fans are still marked
+    /// as managed. Used when returning a fan keeps failing: thermalmonitord
+    /// then reclaims the fan itself instead of leaving it on a stale target.
+    public func releaseHandoff() throws {
+        guard let force = registers.number("Ftst"), force != 0 || requestedHandoff else { return }
+        try registers.writeNumber("Ftst", 0)
+        requestedHandoff = false
+        handoffRequestedAt = nil
+        handoffReleasedAt = clock()
+    }
+
+    private func requestHandoff() throws {
+        requestedHandoff = true
+        try registers.writeNumber("Ftst", 1)
+        handoffRequestedAt = clock()
+    }
+
+    /// Re-assert the global handoff if something cleared it while we still own fans.
+    private func keepHandoff() throws {
+        guard requestedHandoff, !managed.isEmpty, registers.number("Ftst") == 0 else { return }
+        try registers.writeNumber("Ftst", 1)
+    }
+
+    /// Forget a fan that was taken back so the next acquisition starts cleanly.
+    public func forget(fan: Int) {
+        managed.remove(fan)
+        modeWrites.removeValue(forKey: fan)
+        targetWrites.removeValue(forKey: fan)
+        startingStoppedFans.removeValue(forKey: fan)
     }
 
     private func writeConfirmedTarget(_ rpm: Double, fan: Int) throws {

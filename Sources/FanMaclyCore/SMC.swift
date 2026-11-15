@@ -39,6 +39,10 @@ public final class SMCClient: SMCRegisters {
     private lazy var fanModes = FanModeController(registers: self)
     public init() {}
     deinit { fm_close(connection) }
+    /// See `FanModeController.deferHandoff()`.
+    public func deferHandoff() { fanModes.deferHandoff() }
+    /// See `FanModeController.releaseHandoff()`.
+    public func releaseHandoff() throws { try fanModes.releaseHandoff() }
     public func open() throws {
         #if !arch(arm64)
         throw FanMaclyError.message("FanMacly поддерживает только Mac с Apple Silicon.")
@@ -117,6 +121,7 @@ public final class SMCClient: SMCRegisters {
         try fanModes.setManual(manual, fan: fan)
     }
     public func setTarget(_ rpm: Double, fan: Int) throws { try fanModes.setTarget(rpm, fan: fan) }
+    public func forgetFan(_ fan: Int) { fanModes.forget(fan: fan) }
     public func fanDiagnostics() -> String {
         let count = min(10, max(0, Int(number("FNum") ?? 0)))
         let keys = ["Ftst"] + (0..<count).flatMap { ["F\($0)Md", "F\($0)md", "F\($0)Tg", "F\($0)Ac"] }

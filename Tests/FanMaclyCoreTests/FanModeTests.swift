@@ -6,6 +6,8 @@ private final class Registers: SMCRegisters {
     var writes: [(String, Double)] = []
     var ready = false
     var ignoreTarget = false
+    /// Mode writes are accepted but never take effect (thermalmonitord has not yielded).
+    var ignoreMode = false
     var deferred = Set<String>()
     var queued: [String: Double] = [:]
     func flush() { values.merge(queued) { _, new in new }; queued = [:] }
@@ -16,6 +18,7 @@ private final class Registers: SMCRegisters {
             throw SMCWriteFailure(key: key, ioReturn: 0, result: 0x82, status: 0)
         }
         if ignoreTarget && key.hasSuffix("Tg") { return }
+        if ignoreMode && key.hasSuffix("Md") { return }
         if deferred.contains(key) { queued[key] = value; return }
         values[key] = value
     }
@@ -106,13 +109,94 @@ final class FanModeTests: XCTestCase {
         registers.values["F0Md"] = 0
         registers.deferred = ["F0Md"]
         let modes = FanModeController(registers: registers)
+        // Ftst is requested first on every model, then the mode write follows.
+        XCTAssertThrowsError(try modes.setManual(true, fan: 0)) { XCTAssertTrue($0 is FanControlPreparing) }
+        XCTAssertEqual(registers.values["Ftst"], 1)
         XCTAssertThrowsError(try modes.setManual(true, fan: 0))
         XCTAssertEqual(registers.values["F0Md"], 0)
         XCTAssertEqual(registers.queued["F0Md"], 1)
         try modes.setManual(false, fan: 0)
         registers.flush()
         XCTAssertEqual(registers.values["F0Md"], 0)
-        XCTAssertEqual(registers.writes.last?.1, 0)
+        XCTAssertEqual(registers.values["Ftst"], 0)
+        XCTAssertTrue(registers.writes.contains { $0.0 == "F0Md" && $0.1 == 0 })
+    }
+    func testAutomaticModeZeroAlsoRequestsHandoffAndKeepsIt() throws {
+        let registers = Registers()
+        registers.values["F0Md"] = 0
+        let modes = FanModeController(registers: registers)
+        XCTAssertThrowsError(try modes.setManual(true, fan: 0)) { XCTAssertTrue($0 is FanControlPreparing) }
+        XCTAssertEqual(registers.values["Ftst"], 1)
+        try modes.setManual(true, fan: 0)
+        XCTAssertEqual(registers.values["F0Md"], 1)
+        // Something clears Ftst while we own the fan: it is re-asserted.
+        registers.values["Ftst"] = 0
+        try modes.setTarget(2500, fan: 0)
+        XCTAssertEqual(registers.values["Ftst"], 1)
+        // The OS takes the fan back: a typed, recoverable error.
+        registers.values["F0Md"] = 0
+        XCTAssertThrowsError(try modes.setTarget(2500, fan: 0)) { error in
+            XCTAssertEqual(error as? FanControlLost, FanControlLost(fan: 0, observedMode: 0))
+        }
+    }
+    func testReacquireRightAfterReleaseLetsHandoffSettle() throws {
+        let registers = Registers()
+        registers.values["F0Md"] = 0
+        var time = 0.0
+        let modes = FanModeController(registers: registers, clock: { time })
+        XCTAssertThrowsError(try modes.setManual(true, fan: 0))
+        try modes.setManual(true, fan: 0)
+        try modes.setManual(false, fan: 0)
+        XCTAssertEqual(registers.values["Ftst"], 0)
+        // A new request one second later must not raise Ftst yet.
+        time = 1
+        XCTAssertThrowsError(try modes.setManual(true, fan: 0)) { XCTAssertTrue($0 is FanControlPreparing) }
+        XCTAssertEqual(registers.values["Ftst"], 0)
+        time = 5
+        XCTAssertThrowsError(try modes.setManual(true, fan: 0))
+        XCTAssertEqual(registers.values["Ftst"], 1)
+        time = 6
+        try modes.setManual(true, fan: 0)
+        XCTAssertEqual(registers.values["F0Md"], 1)
+    }
+    func testDeferredHandoffWaitsBeforeRaisingFtst() throws {
+        let registers = Registers()
+        registers.values["F0Md"] = 0
+        var time = 100.0
+        let modes = FanModeController(registers: registers, clock: { time })
+        modes.deferHandoff()
+        XCTAssertThrowsError(try modes.setManual(true, fan: 0))
+        XCTAssertEqual(registers.values["Ftst"], 0)
+        time = 105
+        XCTAssertThrowsError(try modes.setManual(true, fan: 0))
+        XCTAssertEqual(registers.values["Ftst"], 1)
+    }
+    func testHandoffIsPulsedAgainWhenManualModeDoesNotStick() throws {
+        let registers = Registers()
+        registers.values["F0Md"] = 0
+        registers.ignoreMode = true
+        var time = 0.0
+        let modes = FanModeController(registers: registers, clock: { time })
+        XCTAssertThrowsError(try modes.setManual(true, fan: 0))
+        XCTAssertEqual(registers.values["Ftst"], 1)
+        for step in 1...9 {
+            time = Double(step)
+            XCTAssertThrowsError(try modes.setManual(true, fan: 0)) { XCTAssertTrue($0 is FanControlPreparing) }
+            XCTAssertEqual(registers.values["Ftst"], 1)
+        }
+        time = 10
+        XCTAssertThrowsError(try modes.setManual(true, fan: 0))
+        XCTAssertEqual(registers.values["Ftst"], 0, "re-pulse lowers Ftst")
+        time = 12
+        XCTAssertThrowsError(try modes.setManual(true, fan: 0))
+        XCTAssertEqual(registers.values["Ftst"], 0, "kept low while settling")
+        time = 15
+        registers.ignoreMode = false
+        XCTAssertThrowsError(try modes.setManual(true, fan: 0))
+        XCTAssertEqual(registers.values["Ftst"], 1)
+        time = 16
+        try modes.setManual(true, fan: 0)
+        XCTAssertEqual(registers.values["F0Md"], 1)
     }
     func testM4UppercaseKeyUnlocksThenVerifiesModeAndTarget() throws {
         let registers = Registers()
@@ -146,6 +230,7 @@ final class FanModeTests: XCTestCase {
         let registers = Registers()
         registers.values["F0Md"] = 0
         let modes = FanModeController(registers: registers)
+        XCTAssertThrowsError(try modes.setManual(true, fan: 0))
         try modes.setManual(true, fan: 0)
         registers.ignoreTarget = true
         XCTAssertThrowsError(try modes.setTarget(2500, fan: 0))
@@ -192,21 +277,22 @@ final class FanModeTests: XCTestCase {
         _ = try subject.apply(.init(mode: .manual, targets: [0: 2500]), now: 0)
         _ = subject.heartbeat(now: 7)
         subject.tick(now: 12)
+        XCTAssertEqual(subject.status.preparing, true, "still within the handoff window")
+        subject.tick(now: 30)
         XCTAssertEqual(subject.status.mode, .system)
         XCTAssertEqual(subject.status.preparing, false)
         XCTAssertEqual(hardware.registers.values["Ftst"], 0)
     }
-    func testWatchdogAndThermalProtectionWorkDuringHandoff() throws {
-        for hot in [false, true] {
-            let hardware = UnlockHardware()
-            let subject = ControlEngine(hardware: hardware)
-            _ = try subject.apply(.init(mode: .manual, targets: [0: 2500]), now: 0)
-            if hot { hardware.pressure = .serious }
-            subject.tick(now: hot ? 1 : 8)
-            XCTAssertEqual(subject.status.mode, .system)
-            XCTAssertEqual(subject.status.preparing, false)
-            XCTAssertEqual(hardware.registers.values["Ftst"], 0)
-        }
+    func testCriticalPressureDuringHandoffReturnsControlAndClearsUnlock() throws {
+        let hardware = UnlockHardware()
+        let subject = ControlEngine(hardware: hardware)
+        _ = try subject.apply(.init(mode: .manual, targets: [0: 2500]), now: 0)
+        hardware.pressure = .critical
+        subject.tick(now: 1)
+        XCTAssertEqual(subject.status.mode, .system)
+        XCTAssertEqual(subject.status.preparing, false)
+        XCTAssertEqual(subject.status.suspension?.kind, .thermal)
+        XCTAssertEqual(hardware.registers.values["Ftst"], 0)
     }
     func testMissingModeNeverWritesBlindKeys() {
         let registers = Registers()
@@ -263,7 +349,7 @@ final class FanModeTests: XCTestCase {
         engine.tick(now: 3)
         XCTAssertGreaterThan(try XCTUnwrap(engine.status.targets[0]), original)
     }
-    func testAsynchronousRestoreIsVisibleAndBlocksNewControl() throws {
+    func testAsynchronousRestoreIsVisibleAndRetried() throws {
         final class DelayedRestore: FanHardware {
             let mock = MockHardware()
             var ready = false
@@ -277,12 +363,13 @@ final class FanModeTests: XCTestCase {
         let hardware = DelayedRestore()
         let engine = ControlEngine(hardware: hardware)
         _ = try engine.apply(.init(mode: .manual, targets: [0: 2500]), now: 0)
-        try engine.restore(reason: nil)
+        _ = try engine.apply(.init(mode: .system), now: 0.5)
         XCTAssertEqual(engine.status.restoring, true)
-        XCTAssertThrowsError(try engine.apply(.init(mode: .manual, targets: [0: 2500]), now: 1))
         hardware.ready = true
         engine.tick(now: 2)
         XCTAssertEqual(engine.status.restoring, false)
+        XCTAssertEqual(hardware.mock.modes.last?.1, false)
         XCTAssertNoThrow(try engine.apply(.init(mode: .manual, targets: [0: 2500]), now: 3))
+        XCTAssertEqual(engine.status.mode, .manual)
     }
 }

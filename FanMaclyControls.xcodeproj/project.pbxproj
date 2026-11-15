@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		3716E31A740DAECEA1596A5B /* WidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67F3EC39658087C77FFD78FE /* WidgetSnapshot.swift */; };
+		3C1274ADDD4061110A0EBC78 /* FanStatusWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99EF0C61846254EFAB9D243E /* FanStatusWidget.swift */; };
 		76A3743C6AFF6E959FFCBE3D /* FanMaclyControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C4C485CEDDD8459994A39AF /* FanMaclyControls.swift */; };
 		9183F3615B85600156C9F099 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F51423D6CC9DB588136A4F6C /* Assets.xcassets */; };
 		E40F9438F7D4498D30D03CCE /* FanModeControlIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97B1637F709655C29CDAF8DF /* FanModeControlIntent.swift */; };
@@ -15,7 +17,9 @@
 /* Begin PBXFileReference section */
 		01DA8774A1343A4A93082FFD /* FanMaclyControls.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = FanMaclyControls.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		2C4C485CEDDD8459994A39AF /* FanMaclyControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FanMaclyControls.swift; sourceTree = "<group>"; };
+		67F3EC39658087C77FFD78FE /* WidgetSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshot.swift; sourceTree = "<group>"; };
 		97B1637F709655C29CDAF8DF /* FanModeControlIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FanModeControlIntent.swift; sourceTree = "<group>"; };
+		99EF0C61846254EFAB9D243E /* FanStatusWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FanStatusWidget.swift; sourceTree = "<group>"; };
 		F51423D6CC9DB588136A4F6C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -25,6 +29,7 @@
 			children = (
 				F51423D6CC9DB588136A4F6C /* Assets.xcassets */,
 				2C4C485CEDDD8459994A39AF /* FanMaclyControls.swift */,
+				99EF0C61846254EFAB9D243E /* FanStatusWidget.swift */,
 			);
 			name = FanMaclyControls;
 			path = Sources/FanMaclyControls;
@@ -51,6 +56,7 @@
 			isa = PBXGroup;
 			children = (
 				97B1637F709655C29CDAF8DF /* FanModeControlIntent.swift */,
+				67F3EC39658087C77FFD78FE /* WidgetSnapshot.swift */,
 			);
 			name = FanMacly;
 			path = Sources/FanMacly;
@@ -123,6 +129,8 @@
 			files = (
 				76A3743C6AFF6E959FFCBE3D /* FanMaclyControls.swift in Sources */,
 				E40F9438F7D4498D30D03CCE /* FanModeControlIntent.swift in Sources */,
+				3C1274ADDD4061110A0EBC78 /* FanStatusWidget.swift in Sources */,
+				3716E31A740DAECEA1596A5B /* WidgetSnapshot.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
