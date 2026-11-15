@@ -1,4 +1,4 @@
-# Политика управления (FanMacly 1.0, протокол помощника 1.0.0)
+# Политика управления (FanMacly 1.0, протокол помощника 1.0.6)
 
 Все числа собраны в `ControlPolicy` ([ControlPolicy.swift](../Sources/FanMaclyCore/ControlPolicy.swift)). Это предпочтения охлаждения FanMacly, откалиброванные под Apple Silicon (M4 Max). Это не опубликованные Apple температурные пределы.
 

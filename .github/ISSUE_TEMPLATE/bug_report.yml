@@ -1,0 +1,50 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: input
+    id: mac
+    attributes:
+      label: Mac model and chip
+      placeholder: MacBook Pro 16" (Mac16,5), M4 Max
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "27.0.1"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: FanMacly version
+      placeholder: "1.0.0 (46)"
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Diagnostic report
+      description: "Settings → Diagnostics → Copy report (Настройки → Диагностика → Скопировать отчёт)."
+      render: text
+  - type: textarea
+    id: log
+    attributes:
+      label: Helper log
+      description: "Output of: /usr/bin/log show --last 30m --predicate 'subsystem == \"app.fanmacly.helper\"'"
+      render: text
+  - type: checkboxes
+    id: others
+    attributes:
+      label: Other fan apps
+      options:
+        - label: Macs Fan Control, TG Pro, smcFanControl or another fan app is installed on this Mac
