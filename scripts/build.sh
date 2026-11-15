@@ -20,8 +20,18 @@ cp Resources/app.fanmacly.helper.plist "$app/Contents/Library/LaunchDaemons/"
 swift scripts/make-icon.swift "$PWD/build"
 iconutil -c icns "$PWD/build/AppIcon.iconset" -o "$app/Contents/Resources/AppIcon.icns"
 # Signed builds share a small status file with the desktop widget through an
-# App Group prefixed with the signing team ID. Ad-hoc builds skip it.
-team="$(printf '%s' "$identity" | sed -nE 's/.*\(([A-Z0-9]{10})\)$/\1/p')"
+# App Group prefixed with the signing team ID. Ad-hoc builds skip it. The team
+# is read from a test signature: the identity name alone is not enough (for
+# "Apple Development: Name (XXXX)" the bracketed value is not the team).
+team=""
+if [ "$identity" != "-" ]; then
+    probe="$(mktemp -d)/probe"
+    cp /usr/bin/true "$probe"
+    codesign --force --sign "$identity" "$probe" >/dev/null 2>&1 || { echo "Cannot sign with identity: $identity" >&2; exit 1; }
+    team="$(codesign -dv "$probe" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+    rm -rf "$(dirname "$probe")"
+    [ "$team" = "not set" ] && team=""
+fi
 app_entitlements=""
 if [ -n "$team" ]; then
     group="$team.app.fanmacly"
@@ -35,7 +45,7 @@ if [ -n "$team" ]; then
 </dict></plist>
 PLIST
 fi
-APP_GROUP="${group:-}" bash scripts/build-controls.sh "$app" "$binary_dir" "$sdk_path" "$identity" "$configuration"
+APP_GROUP="${group:-}" bash scripts/build-controls.sh "$app" "$sdk_path" "$identity" "$configuration"
 
 if [ "$identity" = "-" ]; then
     codesign --force --sign - --identifier app.fanmacly.helper "$app/Contents/MacOS/FanMaclyHelper"

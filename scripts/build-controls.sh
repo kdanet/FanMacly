@@ -1,11 +1,17 @@
 #!/bin/bash
 set -euo pipefail
+# Builds the WidgetKit extension (Control Center controls and the desktop
+# widget) into the app and generates the app's App Intents metadata.
+# Called by build.sh: build-controls.sh <app> <sdk-path> <identity> <release|debug>
 app="$1"
-binary_dir="$2"
-sdk_path="$3"
-identity="$4"
-configuration="$5"
-case "$configuration" in release) xcode_configuration=Release ;; debug) xcode_configuration=Debug ;; *) exit 1 ;; esac
+sdk_path="$2"
+identity="$3"
+configuration="$4"
+case "$configuration" in
+    release) xcode_configuration=Release ;;
+    debug) xcode_configuration=Debug ;;
+    *) echo "CONFIGURATION must be release or debug, not '$configuration'" >&2; exit 1 ;;
+esac
 controls="$app/Contents/PlugIns/FanMaclyControls.appex"
 metadata="$PWD/build/control-metadata"
 mkdir -p "$controls/Contents/MacOS" "$controls/Contents/Resources" "$metadata"
@@ -22,6 +28,9 @@ fi
 derived="$PWD/build/ControlsDerivedData/Build/Products/$xcode_configuration/FanMaclyControls.appex"
 ditto "$derived" "$controls"
 
+# The App Intents metadata processor needs the const-value files that swift
+# build wrote for the app module. This relies on the Swift Build layout of the
+# Swift 6.4 toolchain (.build/out/Intermediates.noindex/.../Release/).
 python3 - "$metadata" "$configuration" <<'PY'
 from pathlib import Path
 import sys

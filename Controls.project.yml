@@ -30,8 +30,8 @@ targets:
         CODE_SIGNING_ALLOWED: NO
         SKIP_INSTALL: YES
         GENERATE_INFOPLIST_FILE: NO
-        MARKETING_VERSION: '0.8.0'
-        CURRENT_PROJECT_VERSION: '24'
+        MARKETING_VERSION: '1.0.0'
+        CURRENT_PROJECT_VERSION: '46'
 schemes:
   FanMaclyControls:
     build:
