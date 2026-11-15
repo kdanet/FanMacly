@@ -1,0 +1,38 @@
+name: FanMaclyControls
+options:
+  deploymentTarget:
+    macOS: '27.0'
+targets:
+  FanMaclyControls:
+    type: app-extension
+    platform: macOS
+    sources:
+      - Sources/FanMaclyControls
+      - Sources/FanMacly/FanModeControlIntent.swift
+    info:
+      path: Resources/FanMaclyControls-Info.plist
+      properties:
+        CFBundleDisplayName: FanMacly
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSMinimumSystemVersion: '27.0'
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.fanmacly.controls
+        PRODUCT_NAME: FanMaclyControls
+        SWIFT_VERSION: '5.0'
+        ENABLE_APP_SANDBOX: YES
+        APPLICATION_EXTENSION_API_ONLY: YES
+        CODE_SIGN_ENTITLEMENTS: Resources/FanMaclyControls.entitlements
+        CODE_SIGNING_ALLOWED: NO
+        SKIP_INSTALL: YES
+        GENERATE_INFOPLIST_FILE: NO
+        MARKETING_VERSION: '0.8.0'
+        CURRENT_PROJECT_VERSION: '24'
+schemes:
+  FanMaclyControls:
+    build:
+      targets:
+        FanMaclyControls: all
