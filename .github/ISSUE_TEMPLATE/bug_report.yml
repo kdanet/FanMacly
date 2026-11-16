@@ -27,7 +27,7 @@ body:
     id: version
     attributes:
       label: FanMacly version
-      placeholder: "1.0.0 (46)"
+      placeholder: "1.0.1 (47)"
     validations:
       required: true
   - type: textarea
