@@ -22,8 +22,8 @@ import QuartzCore
         let symbol = NSImage(systemSymbolName: "fanblades.fill", accessibilityDescription: nil)!
             .withSymbolConfiguration(.init(pointSize: pointSize, weight: .medium))!
         let mask = CALayer()
-        var symbolRect = CGRect(origin: .zero, size: symbol.size)
-        if let image = symbol.cgImage(forProposedRect: &symbolRect, context: nil, hints: nil) {
+        // At least 2x even on a 1x display: the layer downsamples a finer mask cleanly.
+        if let image = FanIconGlyph.rasterize(symbol, scale: max(2, rotor.contentsScale)) {
             mask.contents = FanIconGlyph.centered(image)
         }
         mask.contentsGravity = .resizeAspect

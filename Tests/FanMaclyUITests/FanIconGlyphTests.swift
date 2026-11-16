@@ -3,7 +3,7 @@ import XCTest
 @testable import FanMacly
 
 final class FanIconGlyphTests: XCTestCase {
-    private func centroid(_ image: CGImage) throws -> CGPoint {
+    static func centroid(_ image: CGImage) throws -> CGPoint {
         let w = image.width, h = image.height
         var bytes = [UInt8](repeating: 0, count: w * h * 4)
         return try bytes.withUnsafeMutableBytes { storage in
@@ -26,7 +26,7 @@ final class FanIconGlyphTests: XCTestCase {
         let rotor = try XCTUnwrap(view.layer?.sublayers?.first)
         let image = try XCTUnwrap(rotor.mask?.contents) as! CGImage
         XCTAssertEqual(image.width, image.height)
-        let center = try centroid(image)
+        let center = try Self.centroid(image)
         XCTAssertEqual(center.x, Double(image.width) / 2, accuracy: 0.06)
         XCTAssertEqual(center.y, Double(image.height) / 2, accuracy: 0.06)
         // Independently rasterize the actual mask under rotation, not just the
@@ -38,7 +38,7 @@ final class FanIconGlyphTests: XCTestCase {
             context.translateBy(x: 96, y: 96)
             context.rotate(by: Double(step) * .pi / 8)
             context.draw(image, in: CGRect(x: -72, y: -72, width: 144, height: 144))
-            let rotated = try centroid(XCTUnwrap(context.makeImage()))
+            let rotated = try Self.centroid(XCTUnwrap(context.makeImage()))
             XCTAssertEqual(rotated.x, 96, accuracy: 0.15, "angle \(step)")
             XCTAssertEqual(rotated.y, 96, accuracy: 0.15, "angle \(step)")
         }
@@ -51,6 +51,24 @@ final class FanIconGlyphTests: XCTestCase {
             XCTAssertEqual(rotor.position, CGPoint(x: 12, y: 12))
             XCTAssertEqual(rotor.anchorPoint, CGPoint(x: 0.5, y: 0.5))
             XCTAssertEqual(rotor.mask?.frame, CGRect(x: 1, y: 1, width: 18, height: 18))
+        }
+    }
+}
+
+final class FanIconGlyphScaleTests: XCTestCase {
+    /// CI Macs have no Retina display, so the symbol is rasterized at 1x there.
+    /// The centered mask must stay balanced at every scale.
+    func testCenteredMaskIsBalancedAtEveryScale() throws {
+        let symbol = try XCTUnwrap(NSImage(systemSymbolName: "fanblades.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 18, weight: .medium)))
+        for scale in [1.0, 2.0, 3.0] {
+            let raw = try XCTUnwrap(FanIconGlyph.rasterize(symbol, scale: scale))
+            let image = FanIconGlyph.centered(raw)
+            XCTAssertEqual(image.width, image.height)
+            let center = try FanIconGlyphTests.centroid(image)
+            // A quarter of a 1x pixel: invisible, and well below the half-pixel wobble of an unbalanced mask.
+            XCTAssertEqual(center.x / Double(image.width), 0.5, accuracy: 0.25 / 24, "scale \(scale)")
+            XCTAssertEqual(center.y / Double(image.height), 0.5, accuracy: 0.25 / 24, "scale \(scale)")
         }
     }
 }
