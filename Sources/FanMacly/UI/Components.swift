@@ -59,6 +59,17 @@ struct MetricView: View {
     }
 }
 
+extension View {
+    /// `onHover` for the panel. The popover's content lives as long as the app,
+    /// and a button can close the popover under the cursor (the footer opens a
+    /// window): SwiftUI then never delivers the exit, and the button would come
+    /// back highlighted the next time the panel opens.
+    func panelHover(_ hovering: Binding<Bool>) -> some View {
+        onHover { hovering.wrappedValue = $0 }
+            .onReceive(NotificationCenter.default.publisher(for: NSPopover.didCloseNotification)) { _ in hovering.wrappedValue = false }
+    }
+}
+
 struct ModeTile: View {
     let title: String
     let symbol: String
@@ -94,7 +105,7 @@ struct ModeTile: View {
         .buttonStyle(.plain)
         .disabled(disabled)
         .opacity(disabled ? 0.45 : 1)
-        .onHover { hovering = $0 }
+        .panelHover($hovering)
         .animation(.easeOut(duration: 0.15), value: selected)
         .accessibilityLabel(title)
         .accessibilityAddTraits(selected ? .isSelected : [])

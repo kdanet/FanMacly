@@ -48,7 +48,7 @@ private struct FooterButton: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
-        .onHover { hovering = $0 }
+        .panelHover($hovering)
     }
 }
 
