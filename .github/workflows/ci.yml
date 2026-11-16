@@ -13,13 +13,17 @@ concurrency:
 
 jobs:
   build-and-test:
-    runs-on: macos-26
+    # Runner images are keyed by Xcode version; this one is macOS 27 on Apple Silicon.
+    runs-on: xcode-27
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Select Xcode 27
         run: |
           xcode="$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$xcode" ] && /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -version 2>/dev/null | grep -q '^Xcode 27'; then
+            xcode=/Applications/Xcode.app
+          fi
           if [ -z "$xcode" ]; then
             echo "::error::Xcode 27 is not installed on this runner image."
             ls -d /Applications/Xcode*.app
