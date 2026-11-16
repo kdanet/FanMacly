@@ -83,7 +83,7 @@ import WidgetKit
         for window in CommandLine.arguments.filter({ $0.hasPrefix("--open-window=") }).compactMap({ AppWindow(rawValue: String($0.dropFirst("--open-window=".count))) }) {
             DispatchQueue.main.async { [weak self] in self?.windows.show(window) }
         }
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.1"
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.2"
         if UserDefaults.standard.string(forKey: "lastPresentedVersion") != version || CommandLine.arguments.contains("--show-panel") {
             UserDefaults.standard.set(version, forKey: "lastPresentedVersion")
             DispatchQueue.main.async { [weak self] in self?.showPopover() }
